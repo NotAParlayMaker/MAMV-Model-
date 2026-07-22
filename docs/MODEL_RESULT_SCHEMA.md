@@ -1,3 +1,3 @@
 # Portable result schema
 
-New exports use `mamv-model-result/v2` and `schemas/mamv-model-result-v2.json`. Loaders retain `v1` support and migrate it with an explicit limitation: v1 did not record complete context or artifact revisions. Unknown versions fail clearly. Candidate frame IDs always refer to the canonical result frame.
+New exports use `mamv-model-result/v3` and `schemas/mamv-model-result-v3.json`. Loaders retain `v1` and `v2` support; legacy results migrate with `decision_provenance: null`, empty operation records, and an explicit unavailable limitation rather than fabricated history. Unknown major versions fail clearly. Candidate frame IDs always refer to the canonical result frame.

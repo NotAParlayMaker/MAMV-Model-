@@ -13,6 +13,8 @@ def to_mamv_ir_workflow_input(result: MAMVModelResult) -> dict[str, Any]:
         "answer": result.answer,
         "warnings": [w.__dict__ for w in result.warnings],
         "model_artifacts": result.inference_frame.model_artifacts,
+        "operation_records": result.operation_records,
+        "provenance_unresolved_items": (result.decision_provenance.unresolved_items if result.decision_provenance else ("legacy result did not record this operation",)),
         "limitations": list(result.limitations),
         "workflow_state": "unassigned",
         "completion_decision": None,

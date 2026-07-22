@@ -14,6 +14,7 @@ from .model_result import (
     InferenceFrame, MAMVModelResult, ProposedEvidenceRelation, utc_now, build_inference_frame,
     content_hash, FrameWarning, compare_inference_frames, make_frame_transition, ContradictionCandidate,
 )
+from .decision_provenance import DecisionProvenanceGraph, OperationRecord, build_decision_provenance, operation_record
 
 if TYPE_CHECKING:
     from .session import ConversationSession
@@ -146,8 +147,9 @@ class MAMVModel:
         if mode == "self_refine":
             initial = self._frame(document, question, context, selected, dropped, mode="direct", integration_mode=integration_mode, budget=budget, kwargs=kwargs)
             transition = make_frame_transition(initial, frame, "self_refinement", answer_changed=True, explanation="The answer was revised after model self-critique.")
-        return Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning, budget,
+        output = Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning, budget,
                       answer.notable_convergence, answer.notable_convergence_reason, frame, transition)
+        return self._with_provenance(output, question, selected, dropped, verifier_completed=bool(self.retriever and self.require_grounding))
 
     def answer_file(self, path: str | Path, question: str, **kwargs: Any) -> Answer:
         """Answer from a local course reading with chunk locations as sources."""
@@ -181,7 +183,8 @@ class MAMVModel:
             critique = "Answer not well-supported by selected reading passages"
             reasoning = replace(reasoning, critiques=reasoning.critiques + (critique,)) if reasoning else ReasoningTrace(critiques=(critique,))
         frame = self._frame(reading, question, context, selected, [], mode=str(kwargs.get("mode", "direct")), integration_mode="integrated", budget=None, kwargs=kwargs, document_type=Path(path).suffix.lstrip(".") or "text")
-        return Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning, None, answer.notable_convergence, answer.notable_convergence_reason, frame)
+        output = Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning, None, answer.notable_convergence, answer.notable_convergence_reason, frame)
+        return self._with_provenance(output, question, selected, [], verifier_completed=True)
 
     def answer_files(self, paths: list[str | Path] | tuple[str | Path, ...], question: str, *, synthesis_mode: Literal["source_separated", "cautious_synthesis", "consensus_only", "contradiction_first"] = "cautious_synthesis", max_chunks_per_document: int = 3, min_documents: int = 2, top_k: int = 6, **kwargs: Any) -> Answer:
         """Answer an ordered reading collection without collapsing source provenance."""
@@ -211,7 +214,27 @@ class MAMVModel:
         contradictions = tuple(replace(c, frame_id=frame.frame_id) for c in contradictions)
         frame = replace(frame, collection_id=collection.collection_id, document_ids=tuple(refs), selected_chunks_per_document={d: tuple(i.source_id for i in selected if i.document_id == d) for d in refs}, dropped_chunks_per_document={d: tuple(i.source_id for i in dropped if i.document_id == d) for d in refs}, retrieval_diversity_settings={"top_k":top_k,"max_chunks_per_document":max_chunks_per_document,"min_documents":min_documents,"deduplicate":True,"decisions":decisions}, synthesis_mode=synthesis_mode, contradiction_candidates=contradictions, collection_limitations=collection.limitations)
         agreement = "Conflicting source-specific answers were detected." if contradictions else "Selected source-specific answers did not yield a bounded conflict candidate."
-        return Answer(text, None, tuple(i.source_id for i in selected), ReasoningTrace(critiques=(agreement,)), None, False, None, frame, None, tuple(refs.values()), contradictions, agreement, synthesis_mode)
+        output = Answer(text, None, tuple(i.source_id for i in selected), ReasoningTrace(critiques=(agreement,)), None, False, None, frame, None, tuple(refs.values()), contradictions, agreement, synthesis_mode)
+        return self._with_provenance(output, question, selected, dropped, verifier_completed=False, source_documents=tuple(refs.values()))
+
+    def _with_provenance(self, answer: Answer, question: str, selected: list[Any], dropped: list[Any], *, verifier_completed: bool, source_documents: tuple[Any, ...] = ()) -> Answer:
+        """Attach only operations this façade actually performed, never model scratchwork."""
+        frame = answer.inference_frame
+        assert frame is not None
+        operations = []
+        if self.retriever:
+            operations.append(operation_record(operation_type="retrieve", frame_id=frame.frame_id, implementation_id=type(self.retriever).__name__, input_ids=(content_hash(question),), output_ids=tuple(x.source_id for x in selected + dropped), configuration={"top_k": frame.retrieval.get("top_k")}))
+        if answer.integration_budget:
+            operations.append(operation_record(operation_type="apply_context_budget", frame_id=frame.frame_id, implementation_id="select_with_budget", input_ids=tuple(x.source_id for x in selected + dropped), output_ids=tuple(x.source_id for x in selected), status="completed", configuration={"max_tokens": answer.integration_budget.max_tokens}, warnings=("CONTEXT_TRUNCATED",) if answer.integration_budget.truncated else ()))
+        operations.append(operation_record(operation_type="generate", frame_id=frame.frame_id, implementation_id=type(self.qa).__name__, input_ids=tuple(x.source_id for x in selected), output_ids=(content_hash(answer.text),), deterministic=not bool(frame.inference.get("temperature", 0)), configuration=frame.inference))
+        if verifier_completed:
+            operations.append(operation_record(operation_type="verify_claim", frame_id=frame.frame_id, implementation_id=type(self.verifier).__name__, input_ids=(content_hash(answer.text),) + tuple(x.source_id for x in selected), output_ids=(), configuration=frame.grounding))
+        else:
+            operations.append(operation_record(operation_type="verify_claim", frame_id=frame.frame_id, implementation_id=type(self.verifier).__name__, status="skipped", limitations=("Verification was not run on this inference path.",)))
+        graph = build_decision_provenance(frame=frame, question=question, source_documents=source_documents,
+            retrieved_chunks=selected, dropped_chunks=dropped, answer=answer, operation_records=operations,
+            limitations=("Decision provenance records observable operations and data relationships; it does not reveal hidden cognition or chain-of-thought.",))
+        return replace(answer, decision_provenance=graph, operation_records=tuple(operations))
 
     def _frame(self, original: str, question: str, context: str, selected: list[Any], dropped: list[Any], *, mode: str, integration_mode: str, budget: IntegrationBudget | None, kwargs: dict[str, Any], warnings: tuple[FrameWarning, ...] = (), document_type: str | None = None) -> InferenceFrame:
         artifacts = {"base_model_id": getattr(self.qa, "model_id", type(self.qa).__name__), "requested_revision": getattr(self.qa, "requested_revision", None), "resolved_revision": getattr(self.qa, "resolved_revision", None), "adapter_id": getattr(self.qa, "adapter_id", None), "adapter_revision": getattr(self.qa, "adapter_revision", None), "tokenizer_id": getattr(getattr(self.qa, "tokenizer", None), "name_or_path", type(getattr(self.qa, "tokenizer", None)).__name__), "tokenizer_revision": getattr(self.qa, "tokenizer_revision", None), "local_config_hash": content_hash(getattr(getattr(self.qa, "model", None), "config", {}))}
@@ -286,6 +309,11 @@ class MAMVModel:
             ) for item in evidence)
         # Analyzers are deliberately optional and their outputs are warning-only metadata.
         warnings = frame.warnings + tuple(FrameWarning("GROUNDING_SCOPE_LIMITED", f"Semantic analyzer available: {analyzer.__class__.__name__}", "semantic_analyzers", "info") for analyzer in semantic_analyzers)
+        operations = answer.operation_records + (operation_record(operation_type="export_result", frame_id=frame.frame_id, implementation_id="MAMVModel.produce_result", input_ids=(content_hash(answer.text),), output_ids=(), configuration={"claims": include_claim_candidates, "evidence": include_evidence_candidates}),)
+        graph = build_decision_provenance(frame=frame, question=question, retrieved_chunks=selected, dropped_chunks=excluded,
+            answer=answer, claim_candidates=claims, evidence_candidates=evidence,
+            verifier_results=(grounding,) if grounding else (), contradiction_candidates=answer.contradiction_candidates,
+            operation_records=operations, limitations=("Decision provenance records observable operations and data relationships; it does not reveal hidden cognition or chain-of-thought.",))
         return MAMVModelResult(
             MODEL_RESULT_SCHEMA_VERSION, "result-" + content_hash({"frame_id": frame.frame_id, "answer": answer.text})[:24],
             answer.text, selected_ids, frame, summary,
@@ -294,6 +322,7 @@ class MAMVModel:
                               grounding.confidence if grounding else None),
             grounding, estimate_genericity(answer.text), answer.integration_budget,
             warnings, tuple(limitations), utc_now(), claims, evidence, relations, answer.frame_transition,
+            decision_provenance=graph, operation_records=operations,
         )
 
 
@@ -326,5 +355,5 @@ def _contradictions(items: list[tuple[RetrievedDocument, Answer]], frame_id: str
     return tuple(result)
 
 
-__all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "ProposedEvidenceRelation", "ReasoningTrace", "build_inference_frame", "compare_inference_frames", "estimate_genericity"]
+__all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "DecisionProvenanceGraph", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "OperationRecord", "ProposedEvidenceRelation", "ReasoningTrace", "build_decision_provenance", "build_inference_frame", "compare_inference_frames", "estimate_genericity"]
 from .provenance import compare_evaluation_reports
