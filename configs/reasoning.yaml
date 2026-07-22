@@ -1,0 +1,6 @@
+_base: base.yaml
+reasoning:
+  strategy: direct # direct, cot, self_consistency, or self_refine
+  num_samples: 5
+  max_refine_iterations: 2
+  require_grounding: true
