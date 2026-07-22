@@ -57,6 +57,20 @@ def main() -> None:
     )
 
     def tokenize(row):
+        if c.data.get("use_chat_template", False):
+            prompt = tokenizer.apply_chat_template(
+                [
+                    {"role": "system", "content": "Answer using only the document evidence."},
+                    {
+                        "role": "user",
+                        "content": f"Document:\n{row['document']}\n\nQuestion: {row['question']}",
+                    },
+                    {"role": "assistant", "content": row["answer"]},
+                ],
+                tokenize=False,
+                add_generation_prompt=False,
+            )
+            return tokenizer(prompt, truncation=True, max_length=c.data.get("max_length", 1024))
         return tokenizer(
             template.format(**row), truncation=True, max_length=c.data.get("max_length", 1024)
         )

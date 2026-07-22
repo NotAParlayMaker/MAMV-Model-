@@ -28,7 +28,11 @@ class MAMVModel:
             raise ValueError(
                 "model_id_or_path is required; train or download a real checkpoint first."
             )
-        return cls(DocumentQABackend.from_pretrained(model_id_or_path, **kwargs))
+        require_grounding = kwargs.pop("require_grounding", True)
+        return cls(
+            DocumentQABackend.from_pretrained(model_id_or_path, **kwargs),
+            require_grounding=require_grounding,
+        )
 
     def answer(self, document: str, question: str, **kwargs: Any) -> Answer:
         sources = self.retriever.retrieve(question) if self.retriever else []

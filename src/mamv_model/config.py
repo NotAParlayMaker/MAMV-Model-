@@ -55,6 +55,16 @@ class MAMVConfig:
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
 
 
+def reasoning_answer_kwargs(reasoning: ReasoningConfig) -> dict[str, Any]:
+    """Translate declarative reasoning settings into ``MAMVModel.answer`` kwargs."""
+    kwargs: dict[str, Any] = {"mode": reasoning.strategy}
+    if reasoning.strategy == "self_consistency":
+        kwargs["n_samples"] = reasoning.num_samples
+    if reasoning.strategy == "self_refine":
+        kwargs["max_iterations"] = reasoning.max_refine_iterations
+    return kwargs
+
+
 def load_config(path: str | Path) -> MAMVConfig:
     """Load YAML, resolving a single `_base` file relative to the child config."""
     source = Path(path)
