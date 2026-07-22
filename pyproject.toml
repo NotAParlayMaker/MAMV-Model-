@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mamv-model"
+version = "0.1.0"
+description = "Grounded document question answering with inspectable baseline weights"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [{name = "MAMV-Model contributors"}]
+dependencies = []
+
+[project.optional-dependencies]
+pdf = ["pypdf>=4.0"]
+
+[project.scripts]
+mamv = "mamv_model.cli:main"
+
+[tool.setuptools]
+packages = ["mamv_model"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+mamv_model = ["weights/*.json"]

@@ -1,0 +1,12 @@
+{
+  "format": "mamv-weights/v1",
+  "name": "mamv-base",
+  "description": "Inspectable baseline ranking weights for grounded extractive QA.",
+  "bm25_k1": 1.5,
+  "bm25_b": 0.75,
+  "lexical_weight": 0.8,
+  "ngram_weight": 0.2,
+  "minimum_confidence": 0.08,
+  "passage_words": 120,
+  "passage_overlap_words": 24
+}
