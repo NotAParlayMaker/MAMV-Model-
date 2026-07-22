@@ -24,7 +24,7 @@ def _result():
 def test_portable_result_round_trip_and_candidate_labels() -> None:
     result = _result()
     data = json.loads(model_result_to_json(result))
-    assert data["schema_version"] == "mamv-model-result/v3"
+    assert data["schema_version"] == "mamv-model-result/v4"
     assert model_result_from_json(json.dumps(data)) == result
     assert result.claim_candidates[0].status == "unverified"
     assert all(item.status == "model_proposed" for item in result.proposed_relations)
@@ -58,3 +58,44 @@ def test_frame_propagates_and_adapters_make_no_decisions() -> None:
 def test_unknown_version_rejected() -> None:
     with pytest.raises(ValueError, match="Unsupported model result schema version"):
         model_result_from_json('{"schema_version":"future/v9"}')
+
+
+def test_generated_candidates_record_derivation_and_evidence_density() -> None:
+    result = _result()
+    claim = result.claim_candidates[0]
+    assert claim.derivation == "generated"
+    assert claim.evidence_density is not None
+    assert all(item.derivation == "retrieved" for item in result.evidence_candidates)
+    assert result.confidence_signals.model_stated_confidence == 0.8
+
+
+def test_fragmented_export_keeps_chunk_scopes_separate() -> None:
+    class FragmentedBackend:
+        def __init__(self): self.answers = iter(["Blue", "Red"])
+        def answer(self, document: str, question: str, **kwargs: object) -> Answer:
+            return Answer(next(self.answers))
+    result = MAMVModel(FragmentedBackend(), InMemoryRetriever({"a": "blue", "b": "red"}), require_grounding=False).produce_result(
+        "fallback", "what color", integration_mode="fragmented", include_claim_candidates=True,
+        include_evidence_candidates=True, include_relation_candidates=True,
+    )
+    assert [claim.source_ids for claim in result.claim_candidates] == [("a",), ("b",)]
+    assert {relation.claim_id for relation in result.proposed_relations} == {"claim-1", "claim-2"}
+
+
+def test_v3_result_migrates_to_cautious_candidate_metadata() -> None:
+    payload = json.loads(model_result_to_json(_result()))
+    payload["schema_version"] = "mamv-model-result/v3"
+    payload["confidence_signals"] = {"model_confidence": 0.8, "self_confidence": 0.7}
+    del payload["claim_candidates"][0]["derivation"]
+    del payload["claim_candidates"][0]["evidence_density"]
+    del payload["evidence_candidates"][0]["derivation"]
+    migrated = model_result_from_json(json.dumps(payload))
+    assert migrated.schema_version == "mamv-model-result/v4"
+    assert migrated.confidence_signals.model_stated_confidence == 0.7
+    assert migrated.claim_candidates[0].derivation == "generated"
+    assert migrated.evidence_candidates[0].derivation == "retrieved"
+
+
+def test_cot_strategy_is_exported_as_structured_reasoning() -> None:
+    result = MAMVModel(Backend()).produce_result("The sky is blue.", "what color", mode="cot")
+    assert result.inference_frame.reasoning_strategy == "structured_reasoning"

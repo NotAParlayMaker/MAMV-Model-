@@ -61,7 +61,7 @@ self-critique and revision. Select defaults in `configs/reasoning.yaml`:
 `reasoning.strategy`, `reasoning.num_samples`, and
 `reasoning.max_refine_iterations`. When a retriever is present,
 `reasoning.require_grounding` enables a lexical evidence gate; unsupported answers
-are assigned lower confidence and receive a visible critique in their reasoning
+are assigned lower model-stated confidence and receive a visible critique in their reasoning
 trace rather than being silently treated as grounded.
 
 Both inference commands accept `--reasoning-config configs/reasoning.yaml`; its strategy,
@@ -106,7 +106,7 @@ models, agent verification, and multi-document reasoning.
 
 ## Portable, frame-relative results
 
-`produce_result()` emits a portable non-verdict artifact with a canonical inference frame, claim/evidence/relation candidates, typed context-loss warnings, and separate model, consensus, grounding, retrieval-coverage, and coherence signals. MAMV and MAMV-IR adapters preserve frame metadata for downstream work but make no verification verdict or workflow-completion decision. See `docs/INFERENCE_FRAMES.md` and `docs/MODEL_RESULT_SCHEMA.md`.
+`produce_result()` emits a versioned portable non-verdict artifact with a canonical inference frame, claim/evidence/relation candidates, typed context-loss warnings, explicit candidate derivations, generated-candidate evidence density, and separate model-stated, consensus, grounding, retrieval-coverage, and coherence signals. MAMV and MAMV-IR adapters preserve frame metadata for downstream work but make no verification verdict or workflow-completion decision. See `docs/INFERENCE_FRAMES.md` and `docs/MODEL_RESULT_SCHEMA.md`.
 
 ## Roadmap status
 Multi-document collection ingestion, provenance-preserving diverse retrieval, bounded contradiction candidates, temporal distinctions, and explicit synthesis modes are implemented. Candidate relations remain non-authoritative; downstream MAMV verification remains required.

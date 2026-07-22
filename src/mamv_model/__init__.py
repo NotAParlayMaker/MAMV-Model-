@@ -290,23 +290,29 @@ class MAMVModel:
         evidence: tuple[EvidenceCandidate, ...] = ()
         relations: tuple[ProposedEvidenceRelation, ...] = ()
         if include_claim_candidates and answer.text.strip():
-            claims = (ClaimCandidate("claim-1", answer.text.strip(), None, "assertion", "literal", None,
-                      False, selected_ids, frame.frame_id, answer.confidence,
-                      ("Candidate only; MAMV must normalize and verify it.",)),)
+            # Fragmented retrieval preserves one proposal and one evidence scope per chunk.
+            scoped_answers = _fragmented_candidate_answers(answer.text, selected_ids) if frame.inference.get("integration_mode") == "fragmented" else ((answer.text.strip(), selected_ids),)
+            claims = tuple(ClaimCandidate(
+                f"claim-{index}", text, None, "assertion", "literal", None, False,
+                scope, frame.frame_id, answer.confidence,
+                ("Generated candidate only; MAMV must normalize and verify it.",),
+                derivation="generated", evidence_density=_evidence_density(text, [item.text for item in selected if item.source_id in scope]),
+            ) for index, (text, scope) in enumerate(scoped_answers, 1))
         if include_evidence_candidates:
             all_items = [(item, True, None) for item in selected] + [
                 (item, False, "excluded_from_context") for item in excluded]
             evidence = tuple(EvidenceCandidate(
                 f"evidence-{index}", item.source_id, content_hash(item.text), getattr(item, "source_location", None),
                 item.score, selected_flag, dropped, frame.frame_id,
-                ("Retrieval score is not evidence support.",),
+                ("Retrieved candidate only; retrieval score is not evidence support.",),
+                derivation="retrieved",
             ) for index, (item, selected_flag, dropped) in enumerate(all_items, 1))
         if include_relation_candidates and claims and evidence:
             relations = tuple(ProposedEvidenceRelation(
-                claims[0].claim_id, item.evidence_id, "insufficient", None,
+                claim.claim_id, item.evidence_id, "insufficient", None,
                 "Model export does not determine evidentiary support.",
                 ("Model-proposed only; MAMV verification is required.",),
-            ) for item in evidence)
+            ) for claim in claims for item in evidence if item.source_id in claim.source_ids)
         # Analyzers are deliberately optional and their outputs are warning-only metadata.
         warnings = frame.warnings + tuple(FrameWarning("GROUNDING_SCOPE_LIMITED", f"Semantic analyzer available: {analyzer.__class__.__name__}", "semantic_analyzers", "info") for analyzer in semantic_analyzers)
         operations = answer.operation_records + (operation_record(operation_type="export_result", frame_id=frame.frame_id, implementation_id="MAMVModel.produce_result", input_ids=(content_hash(answer.text),), output_ids=(), configuration={"claims": include_claim_candidates, "evidence": include_evidence_candidates}),)
@@ -317,9 +323,12 @@ class MAMVModel:
         return MAMVModelResult(
             MODEL_RESULT_SCHEMA_VERSION, "result-" + content_hash({"frame_id": frame.frame_id, "answer": answer.text})[:24],
             answer.text, selected_ids, frame, summary,
-            ConfidenceSignals(answer.confidence, trace.self_confidence if trace else None,
-                              answer.confidence if mode == "self_consistency" else None,
-                              grounding.confidence if grounding else None),
+            ConfidenceSignals(
+                model_stated_confidence=trace.self_confidence if trace else answer.confidence,
+                consensus_confidence=answer.confidence if mode == "self_consistency" else None,
+                grounding_heuristic_confidence=grounding.confidence if grounding else None,
+                coherence_score=trace.coherence_score if trace else None,
+            ),
             grounding, estimate_genericity(answer.text), answer.integration_budget,
             warnings, tuple(limitations), utc_now(), claims, evidence, relations, answer.frame_transition,
             decision_provenance=graph, operation_records=operations,
@@ -357,3 +366,23 @@ def _contradictions(items: list[tuple[RetrievedDocument, Answer]], frame_id: str
 
 __all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "DecisionProvenanceGraph", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "OperationRecord", "ProposedEvidenceRelation", "ReasoningTrace", "build_decision_provenance", "build_inference_frame", "compare_inference_frames", "estimate_genericity"]
 from .provenance import compare_evaluation_reports
+
+
+def _evidence_density(candidate_text: str, scoped_sources: list[str]) -> float:
+    """Conservative lexical context-density signal for generated candidates, not support."""
+    candidate_tokens = set(_normalise(candidate_text).split())
+    source_tokens = set(_normalise(" ".join(scoped_sources)).split())
+    if not candidate_tokens or not source_tokens:
+        return 0.0
+    return len(candidate_tokens & source_tokens) / len(candidate_tokens)
+
+
+def _fragmented_candidate_answers(answer_text: str, source_ids: tuple[str, ...]) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    """Recover explicitly source-labelled per-chunk answers without synthesizing them."""
+    labelled = []
+    for line in answer_text.splitlines():
+        if line.startswith("[") and "] " in line:
+            source_id, text = line[1:].split("] ", 1)
+            if source_id in source_ids and text.strip():
+                labelled.append((text.strip(), (source_id,)))
+    return tuple(labelled) or ((answer_text.strip(), source_ids),)
