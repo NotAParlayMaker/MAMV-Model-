@@ -43,6 +43,17 @@ model = MAMVModel.load("outputs/mamv")
 answer = model.answer(document="...", question="...")
 ```
 
+## Reasoning strategies
+`DocumentQABackend.answer()` supports `mode="direct"` for the unchanged single-pass
+path, `"cot"` for a parsed step-by-step trace, `"self_consistency"` for majority
+voting across sampled traces, and `"self_refine"` for document-grounded
+self-critique and revision. Select defaults in `configs/reasoning.yaml`:
+`reasoning.strategy`, `reasoning.num_samples`, and
+`reasoning.max_refine_iterations`. When a retriever is present,
+`reasoning.require_grounding` enables a lexical evidence gate; unsupported answers
+are assigned lower confidence and receive a visible critique in their reasoning
+trace rather than being silently treated as grounded.
+
 ## Publish version 1.0
 After validating a real export, ensure `outputs/mamv/config.json` and a model card (`outputs/mamv/README.md` or root `MODEL_CARD.md`) exist. Log in via `huggingface-cli login` or set `HF_TOKEN`, then:
 ```bash

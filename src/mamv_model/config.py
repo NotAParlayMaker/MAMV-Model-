@@ -3,7 +3,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 import yaml
 
 
@@ -39,11 +39,20 @@ class TrainingConfig:
 
 
 @dataclass(frozen=True)
+class ReasoningConfig:
+    strategy: Literal["direct", "cot", "self_consistency", "self_refine"] = "direct"
+    num_samples: int = 5
+    max_refine_iterations: int = 2
+    require_grounding: bool = True
+
+
+@dataclass(frozen=True)
 class MAMVConfig:
     model: ModelConfig = field(default_factory=ModelConfig)
     adapter: AdapterConfig = field(default_factory=AdapterConfig)
     training: TrainingConfig = field(default_factory=TrainingConfig)
     data: dict[str, Any] = field(default_factory=dict)
+    reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
 
 
 def load_config(path: str | Path) -> MAMVConfig:
@@ -62,8 +71,9 @@ def load_config(path: str | Path) -> MAMVConfig:
             },
         }
     return MAMVConfig(
-        ModelConfig(**raw.get("model", {})),
-        AdapterConfig(**raw.get("adapter", {})),
-        TrainingConfig(**raw.get("training", {})),
-        raw.get("data", {}),
+        model=ModelConfig(**raw.get("model", {})),
+        adapter=AdapterConfig(**raw.get("adapter", {})),
+        training=TrainingConfig(**raw.get("training", {})),
+        data=raw.get("data", {}),
+        reasoning=ReasoningConfig(**raw.get("reasoning", {})),
     )
