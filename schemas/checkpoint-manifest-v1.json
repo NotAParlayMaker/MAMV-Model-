@@ -1,0 +1,1 @@
+{"type":"object","required":["schema_version","checkpoint_id","parent_training_run","base_model","adapter_method","dataset_fingerprint","weight_file_hashes","creation_timestamp"]}
