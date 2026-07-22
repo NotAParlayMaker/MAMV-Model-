@@ -2,8 +2,23 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 import re
+from hashlib import sha256
+from types import MappingProxyType
+from typing import Mapping, Sequence
+
+
+@dataclass(frozen=True)
+class DocumentReference:
+    document_id: str; name: str; media_type: str; content_hash: str; source_uri: str | None
+    created_at: str | None; modified_at: str | None; metadata: Mapping[str, str]
+
+
+@dataclass(frozen=True)
+class DocumentCollection:
+    collection_id: str; documents: tuple[DocumentReference, ...]; purpose: str | None = None; limitations: tuple[str, ...] = ()
 
 
 class IngestionError(ValueError):
@@ -22,10 +37,29 @@ class IngestedText(str):
 class DocumentChunk(str):
     """A string-compatible chunk with a human-reviewable source location."""
 
-    def __new__(cls, value: str, source_location: str | None = None) -> "DocumentChunk":
+    def __new__(cls, value: str, source_location: str | None = None, *, document_id: str | None = None, chunk_id: str | None = None, page: int | None = None, section: str | None = None, paragraph: int | None = None, content_hash: str | None = None) -> "DocumentChunk":
         result = super().__new__(cls, value)
         result.source_location = source_location
+        result.document_id, result.chunk_id, result.page = document_id, chunk_id, page
+        result.section, result.paragraph = section, paragraph
+        result.content_hash = content_hash or sha256(value.encode()).hexdigest()
         return result
+
+
+def ingest_documents(paths: Sequence[str | Path], *, purpose: str | None = None) -> tuple[DocumentCollection, dict[str, IngestedText]]:
+    """Ingest an ordered local collection while retaining each source identity."""
+    refs, texts, seen = [], {}, set()
+    for raw in paths:
+        path = Path(raw); text = ingest_file(path); digest = sha256(str(text).encode()).hexdigest()
+        if digest in seen:
+            continue
+        seen.add(digest)
+        stat = path.stat(); doc_id = "doc-" + digest[:24]
+        refs.append(DocumentReference(doc_id, path.name, path.suffix.lower().lstrip(".") or "text", digest, str(path), None, str(int(stat.st_mtime)), MappingProxyType({"filename": path.name})))
+        texts[doc_id] = text
+    if not refs: raise IngestionError("No documents were supplied.")
+    identity = "|".join(f"{r.document_id}:{r.content_hash}" for r in refs)
+    return DocumentCollection("collection-" + sha256(identity.encode()).hexdigest()[:24], tuple(refs), purpose, ("Duplicate content hashes were omitted." if len(refs) < len(paths) else "",) if len(refs) < len(paths) else ()), texts
 
 
 def ingest_file(path: str | Path) -> str:
@@ -67,7 +101,7 @@ def _sentences(paragraph: str) -> list[str]:
     return [s.strip() for s in re.split(r"(?<=[.!?])\s+", paragraph) if s.strip()]
 
 
-def chunk_document(text: str, max_words: int = 350) -> list[str]:
+def chunk_document(text: str, max_words: int = 350, *, document_id: str | None = None) -> list[str]:
     """Chunk text near paragraph/sentence boundaries for a small-model context budget."""
     if max_words < 10:
         raise ValueError("max_words must be at least 10 so sentences can remain intact.")
@@ -84,11 +118,15 @@ def chunk_document(text: str, max_words: int = 350) -> list[str]:
             words = len(unit.split())
             if current and current_words + words > max_words:
                 location = f"page {current_page}" if current_page else None
-                chunks.append(DocumentChunk(" ".join(current), location))
+                value = " ".join(current); chunks.append(DocumentChunk(value, location, document_id=document_id, chunk_id=f"{document_id or 'document'}-chunk-{len(chunks)+1}", page=current_page, paragraph=index, content_hash=sha256(value.encode()).hexdigest()))
                 current, current_words, current_page = [], 0, None
             current.append(unit)
             current_words += words
             current_page = current_page or page
     if current:
-        chunks.append(DocumentChunk(" ".join(current), f"page {current_page}" if current_page else None))
+        value = " ".join(current); chunks.append(DocumentChunk(value, f"page {current_page}" if current_page else None, document_id=document_id, chunk_id=f"{document_id or 'document'}-chunk-{len(chunks)+1}", page=current_page, paragraph=len(paragraphs), content_hash=sha256(value.encode()).hexdigest()))
     return chunks
+
+
+def chunk_documents(collection: DocumentCollection, texts: Mapping[str, str], max_words: int = 350) -> list[DocumentChunk]:
+    return [chunk for doc in collection.documents for chunk in chunk_document(texts[doc.document_id], max_words, document_id=doc.document_id)]
