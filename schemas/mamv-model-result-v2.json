@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","$id":"mamv-model-result-v2.json","type":"object","required":["schema_version","result_id","answer","source_ids","inference_frame","confidence_signals","warnings","limitations","created_at"],"properties":{"schema_version":{"const":"mamv-model-result/v2"},"inference_frame":{"$ref":"inference-frame-v2.json"}}}

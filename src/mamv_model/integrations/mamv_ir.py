@@ -11,6 +11,8 @@ def to_mamv_ir_workflow_input(result: MAMVModelResult) -> dict[str, Any]:
         "frame_id": result.inference_frame.frame_id,
         "source_ids": list(result.source_ids),
         "answer": result.answer,
+        "warnings": [w.__dict__ for w in result.warnings],
+        "model_artifacts": result.inference_frame.model_artifacts,
         "limitations": list(result.limitations),
         "workflow_state": "unassigned",
         "completion_decision": None,

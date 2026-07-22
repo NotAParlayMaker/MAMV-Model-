@@ -17,6 +17,8 @@ class Answer:
     integration_budget: Any | None = None
     notable_convergence: bool = False
     notable_convergence_reason: str | None = None
+    inference_frame: Any | None = None
+    frame_transition: Any | None = None
 
 
 class DocumentQABackend:
