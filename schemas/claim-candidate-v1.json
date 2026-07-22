@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["claim_id","text","source_ids","frame_id","limitations","status"],"properties":{"claim_id":{"type":"string"},"text":{"type":"string"},"source_ids":{"type":"array","items":{"type":"string"}},"frame_id":{"type":"string"},"status":{"const":"unverified"}}}
