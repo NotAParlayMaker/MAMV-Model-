@@ -19,6 +19,12 @@ def to_mamv_verification_request(result: MAMVModelResult) -> dict[str, Any]:
             "evidence_id": item.evidence_id, "source_id": item.source_id,
             "frame_id": item.frame_id, "limitations": list(item.limitations),
         } for item in result.evidence_candidates],
+        "contradiction_candidates": [{
+            "contradiction_id": item.contradiction_id, "claim_a_id": item.claim_a_id,
+            "claim_b_id": item.claim_b_id, "source_a_ids": list(item.source_a_ids),
+            "source_b_ids": list(item.source_b_ids), "relation": item.relation,
+            "frame_id": item.frame_id, "limitations": list(item.limitations),
+        } for item in result.contradiction_candidates],
         "warnings": [w.__dict__ for w in result.warnings],
         "model_artifacts": result.inference_frame.model_artifacts,
         "limitations": list(result.limitations),

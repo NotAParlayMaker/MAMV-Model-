@@ -7,12 +7,12 @@ from typing import TYPE_CHECKING, Any, Literal
 from .document_qa import Answer, DocumentQABackend
 from .genericity import GenericityResult, estimate_genericity
 from .reasoning import ReasoningTrace
-from .retrieval import IntegrationBudget, Retriever, select_with_budget
+from .retrieval import IntegrationBudget, Retriever, select_with_budget, InMemoryRetriever, RetrievalDiversitySettings, select_diverse, RetrievedDocument
 from .verifier import LexicalVerifier, VerificationResult
 from .model_result import (
     MODEL_RESULT_SCHEMA_VERSION, ClaimCandidate, ConfidenceSignals, EvidenceCandidate,
     InferenceFrame, MAMVModelResult, ProposedEvidenceRelation, utc_now, build_inference_frame,
-    content_hash, FrameWarning, compare_inference_frames, make_frame_transition,
+    content_hash, FrameWarning, compare_inference_frames, make_frame_transition, ContradictionCandidate,
 )
 
 if TYPE_CHECKING:
@@ -182,6 +182,36 @@ class MAMVModel:
         frame = self._frame(reading, question, context, selected, [], mode=str(kwargs.get("mode", "direct")), integration_mode="integrated", budget=None, kwargs=kwargs, document_type=Path(path).suffix.lstrip(".") or "text")
         return Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning, None, answer.notable_convergence, answer.notable_convergence_reason, frame)
 
+    def answer_files(self, paths: list[str | Path] | tuple[str | Path, ...], question: str, *, synthesis_mode: Literal["source_separated", "cautious_synthesis", "consensus_only", "contradiction_first"] = "cautious_synthesis", max_chunks_per_document: int = 3, min_documents: int = 2, top_k: int = 6, **kwargs: Any) -> Answer:
+        """Answer an ordered reading collection without collapsing source provenance."""
+        from .ingestion import ingest_documents, chunk_documents
+        collection, texts = ingest_documents(paths)
+        chunks = chunk_documents(collection, texts)
+        refs = {d.document_id: d for d in collection.documents}
+        candidates = [RetrievedDocument(str(c), c.chunk_id or f"{c.document_id}-chunk-{i}", 0.0, c.document_id, refs[c.document_id].media_type, refs[c.document_id].modified_at, c.content_hash, c.source_location) for i, c in enumerate(chunks, 1)]
+        ranked = InMemoryRetriever({x.source_id: x.text for x in candidates}).retrieve(question, top_k=len(candidates))
+        candidates = [replace(x, score=next(r.score for r in ranked if r.source_id == x.source_id)) for x in candidates]
+        settings = RetrievalDiversitySettings(top_k, max_chunks_per_document, min_documents, True)
+        selected, dropped, decisions = select_diverse(candidates, settings)
+        if not selected: selected = candidates[:top_k]
+        per_source: list[tuple[RetrievedDocument, Answer]] = [(item, self._ask(item.text, question, **kwargs)) for item in selected]
+        contradictions = _contradictions(per_source, "pending")
+        if synthesis_mode == "source_separated": text = "\n\n".join(f"[{refs[i.document_id].name}] {a.text}" for i, a in per_source)
+        elif synthesis_mode == "consensus_only":
+            normalized = {}; [normalized.setdefault(_normalise(a.text), []).append((i,a)) for i,a in per_source]
+            agreed = [v for v in normalized.values() if len({i.document_id for i,_ in v}) >= min_documents]
+            text = "\n".join(a.text for group in agreed for _, a in group[:1]) or "No claim met the configured cross-source agreement threshold."
+        else:
+            synthesized = self._ask("\n\n".join(i.text for i in selected), question, **kwargs).text
+            conflict = "Source disagreements require review: " + "; ".join(c.explanation_summary for c in contradictions) if contradictions else "No bounded contradiction candidate was detected among selected passages."
+            text = (conflict + "\n\n" + synthesized) if synthesis_mode == "contradiction_first" else (synthesized + "\n\n" + conflict)
+        # Rebind proposal candidates to the immutable frame identity.
+        frame = self._frame("\n\n".join(str(t) for t in texts.values()), question, "\n\n".join(i.text for i in selected), selected, dropped, mode=str(kwargs.get("mode", "direct")), integration_mode="integrated", budget=None, kwargs=kwargs, document_type="collection")
+        contradictions = tuple(replace(c, frame_id=frame.frame_id) for c in contradictions)
+        frame = replace(frame, collection_id=collection.collection_id, document_ids=tuple(refs), selected_chunks_per_document={d: tuple(i.source_id for i in selected if i.document_id == d) for d in refs}, dropped_chunks_per_document={d: tuple(i.source_id for i in dropped if i.document_id == d) for d in refs}, retrieval_diversity_settings={"top_k":top_k,"max_chunks_per_document":max_chunks_per_document,"min_documents":min_documents,"deduplicate":True,"decisions":decisions}, synthesis_mode=synthesis_mode, contradiction_candidates=contradictions, collection_limitations=collection.limitations)
+        agreement = "Conflicting source-specific answers were detected." if contradictions else "Selected source-specific answers did not yield a bounded conflict candidate."
+        return Answer(text, None, tuple(i.source_id for i in selected), ReasoningTrace(critiques=(agreement,)), None, False, None, frame, None, tuple(refs.values()), contradictions, agreement, synthesis_mode)
+
     def _frame(self, original: str, question: str, context: str, selected: list[Any], dropped: list[Any], *, mode: str, integration_mode: str, budget: IntegrationBudget | None, kwargs: dict[str, Any], warnings: tuple[FrameWarning, ...] = (), document_type: str | None = None) -> InferenceFrame:
         artifacts = {"base_model_id": getattr(self.qa, "model_id", type(self.qa).__name__), "requested_revision": getattr(self.qa, "requested_revision", None), "resolved_revision": getattr(self.qa, "resolved_revision", None), "adapter_id": getattr(self.qa, "adapter_id", None), "adapter_revision": getattr(self.qa, "adapter_revision", None), "tokenizer_id": getattr(getattr(self.qa, "tokenizer", None), "name_or_path", type(getattr(self.qa, "tokenizer", None)).__name__), "tokenizer_revision": getattr(self.qa, "tokenizer_revision", None), "local_config_hash": content_hash(getattr(getattr(self.qa, "model", None), "config", {}))}
         generation = {k: kwargs.get(k) for k in ("temperature", "top_p", "max_new_tokens", "seed") if k in kwargs} | {"number_of_samples": kwargs.get("n_samples", 1), "refinement_limit": kwargs.get("max_iterations", 0)}
@@ -267,6 +297,31 @@ class MAMVModel:
 
 def _normalise(text: str) -> str:
     return " ".join(text.casefold().split())
+
+
+def _contradictions(items: list[tuple[RetrievedDocument, Answer]], frame_id: str) -> tuple[ContradictionCandidate, ...]:
+    """Small, inspectable candidate detector; it proposes conflicts, never resolves them."""
+    import re
+    result = []
+    for n, (left, a) in enumerate(items):
+        for right, b in items[n + 1:]:
+            if left.document_id == right.document_id: continue
+            x, y = _normalise(a.text), _normalise(b.text)
+            nums_x, nums_y = set(re.findall(r"\b\d+(?:\.\d+)?\b", x)), set(re.findall(r"\b\d+(?:\.\d+)?\b", y))
+            dates_x, dates_y = set(re.findall(r"\b(?:19|20)\d{2}\b", x)), set(re.findall(r"\b(?:19|20)\d{2}\b", y))
+            polarity = (" not " in f" {x} " ) != (" not " in f" {y} ")
+            relation = None; summary = ""
+            if dates_x and dates_y and dates_x != dates_y:
+                relation, summary = "temporally_distinct", "Different dates may describe different times rather than a contradiction."
+            elif nums_x and nums_y and nums_x != nums_y:
+                relation, summary = "potentially_conflicting", "Different numeric values were proposed by separate sources."
+            elif polarity:
+                relation, summary = "potentially_conflicting", "Opposite polarity appears in source-specific answers."
+            elif x != y and set(x.split()) & set(y.split()):
+                relation, summary = "incomparable", "Answers overlap but the bounded heuristic cannot determine whether their scopes differ."
+            if relation:
+                result.append(ContradictionCandidate(f"contradiction-{len(result)+1}", f"claim-{n+1}", f"claim-{n+2}", (left.source_id,), (right.source_id,), relation, None, summary, frame_id, ("Heuristic/model-proposed candidate only; MAMV retains verification authority.",)))
+    return tuple(result)
 
 
 __all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "ProposedEvidenceRelation", "ReasoningTrace", "build_inference_frame", "compare_inference_frames", "estimate_genericity"]

@@ -19,6 +19,10 @@ class Answer:
     notable_convergence_reason: str | None = None
     inference_frame: Any | None = None
     frame_transition: Any | None = None
+    document_sources: tuple[Any, ...] = ()
+    contradiction_candidates: tuple[Any, ...] = ()
+    source_agreement_summary: str | None = None
+    synthesis_mode: str | None = None
 
 
 class DocumentQABackend:

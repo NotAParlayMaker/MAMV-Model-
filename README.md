@@ -105,3 +105,6 @@ models, agent verification, and multi-document reasoning.
 ## Portable, frame-relative results
 
 `produce_result()` emits a portable non-verdict artifact with a canonical inference frame, claim/evidence/relation candidates, typed context-loss warnings, and separate model, consensus, grounding, retrieval-coverage, and coherence signals. MAMV and MAMV-IR adapters preserve frame metadata for downstream work but make no verification verdict or workflow-completion decision. See `docs/INFERENCE_FRAMES.md` and `docs/MODEL_RESULT_SCHEMA.md`.
+
+## Roadmap status
+Multi-document collection ingestion, provenance-preserving diverse retrieval, bounded contradiction candidates, temporal distinctions, and explicit synthesis modes are implemented. Candidate relations remain non-authoritative; downstream MAMV verification remains required.
