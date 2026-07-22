@@ -25,3 +25,15 @@ data:
   train_file: datasets/sample_dataset.jsonl
   validation_file: datasets/sample_dataset.jsonl
   max_length: 1024
+verification:
+  strategy: conservative
+  lexical:
+    enabled: true
+  entailment:
+    enabled: false
+    model_id: null
+    revision: null
+  atomic_claims: true
+  detect_numeric_conflicts: true
+  detect_negation_conflicts: true
+  detect_quantifier_conflicts: true
