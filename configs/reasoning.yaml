@@ -4,3 +4,5 @@ reasoning:
   num_samples: 5
   max_refine_iterations: 2
   require_grounding: true
+  integration_mode: integrated # integrated or fragmented
+  integration_max_tokens: null

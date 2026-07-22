@@ -44,6 +44,8 @@ class ReasoningConfig:
     num_samples: int = 5
     max_refine_iterations: int = 2
     require_grounding: bool = True
+    integration_mode: Literal["fragmented", "integrated"] = "integrated"
+    integration_max_tokens: int | None = None
 
 
 @dataclass(frozen=True)

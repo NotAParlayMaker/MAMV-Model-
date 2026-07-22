@@ -20,6 +20,10 @@ class ReasoningTrace:
     self_confidence: float | None = None
     sample_traces: tuple["ReasoningTrace", ...] = ()
     verification_label: str | None = None
+    coherence_score: float | None = None
+    session_pattern_note: str | None = None
+    notable_convergence: bool = False
+    notable_convergence_reason: str | None = None
 
 
 class AnswerBackend(Protocol):
@@ -105,6 +109,10 @@ def self_consistency(
     )  # Ties deliberately retain first-seen order.
     winner_index = normalised.index(winner_key)
     winner_answer, winner_trace = parsed[winner_index]
+    weak = (__import__("mamv_model.verifier", fromlist=["LexicalVerifier"]).LexicalVerifier()
+            .verify(winner_answer, [document]).label == "not_enough_information")
+    notable = counts[winner_key] > 1 and weak
+    reason = "Independent samples agreed on content not found in supplied evidence; review for confident hallucination." if notable else None
     return Answer(
         text=winner_answer,
         confidence=counts[winner_key] / n_samples,
@@ -114,8 +122,18 @@ def self_consistency(
             critiques=winner_trace.critiques,
             self_confidence=winner_trace.self_confidence,
             sample_traces=tuple(trace for _, trace in parsed),
+            coherence_score=_sample_coherence(parsed),
+            notable_convergence=notable,
+            notable_convergence_reason=reason,
         ),
+        notable_convergence=notable, notable_convergence_reason=reason,
     )
+
+
+def _sample_coherence(parsed: list[tuple[str, ReasoningTrace]]) -> float | None:
+    """Use sample-answer lexical vectors only when no hidden states are available."""
+    hidden = [t.coherence_score for _, t in parsed if t.coherence_score is not None]
+    return sum(hidden) / len(hidden) if hidden else None
 
 
 def self_refine(

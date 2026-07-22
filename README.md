@@ -67,6 +67,23 @@ sample count, refinement limit, and grounding setting are applied at runtime. Th
 bundled weights or claimed benchmark scores: run the commands above and retain the generated
 `outputs/evaluation.json` with the checkpoint that produced it.
 
+## Coherence, context, and session telemetry
+`ReasoningTrace.coherence_score` is a deterministic geometric score computed from available
+generation hidden states. It is a proxy for output consistency, not a statement about model
+consciousness, self-awareness, or physical dynamics; unavailable hidden states leave it `None`.
+`IntegrationBudget` reports the configured context token budget, used tokens, included and
+dropped chunks, so context loss is inspectable rather than silently truncated. Retrieval can use
+`integration_mode="integrated"` (one merged context) or `"fragmented"` (one answer per chunk);
+the latter visibly reports disagreement rather than selecting a hidden winner.
+
+Conversation sessions are in memory only and carry bounded prior turns, dropping older turns
+first. Their repeated-critique pattern notes are informational and do not modify weights or
+bypass grounding. Permanent reorganization is only LoRA/QLoRA fine-tuning through
+`scripts/train.py`, including its `--resume-from-checkpoint` flow. A notable-convergence flag
+means independent samples agreed despite weak evidence: it is a human-review signal for possible
+confident hallucination, never a correctness or confidence signal. Grounding remains the only
+route that can validate evidence support.
+
 ## Publish version 1.0
 After validating a real export, ensure `outputs/mamv/config.json` and a model card (`outputs/mamv/README.md` or root `MODEL_CARD.md`) exist. Log in via `huggingface-cli login` or set `HF_TOKEN`, then:
 ```bash

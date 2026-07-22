@@ -14,6 +14,9 @@ class Answer:
     confidence: float | None = None
     sources: tuple[str, ...] = ()
     reasoning: ReasoningTrace | None = None
+    integration_budget: Any | None = None
+    notable_convergence: bool = False
+    notable_convergence_reason: str | None = None
 
 
 class DocumentQABackend:
@@ -42,11 +45,22 @@ class DocumentQABackend:
 
     def _generate_prompt(self, prompt: str, *, max_new_tokens: int, **gen_kwargs: Any) -> Answer:
         inputs = self.tokenizer(prompt, return_tensors="pt")
-        output = self.model.generate(**inputs, max_new_tokens=max_new_tokens, **gen_kwargs)
+        capture_hidden = gen_kwargs.pop("output_hidden_states", True)
+        output = self.model.generate(
+            **inputs, max_new_tokens=max_new_tokens, return_dict_in_generate=capture_hidden,
+            output_hidden_states=capture_hidden, **gen_kwargs
+        )
+        sequences = getattr(output, "sequences", output)
         text = self.tokenizer.decode(
-            output[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True
+            sequences[0][inputs["input_ids"].shape[-1] :], skip_special_tokens=True
         ).strip()
-        return Answer(text=text)
+        trace = None
+        states = _hidden_vectors(getattr(output, "hidden_states", None)) if capture_hidden else []
+        if states:
+            from .coherence import HiddenStateTrajectory, compute_coherence_score
+            from .reasoning import ReasoningTrace
+            trace = ReasoningTrace(coherence_score=compute_coherence_score(HiddenStateTrajectory(states)))
+        return Answer(text=text, reasoning=trace)
 
     def _direct_prompt(self, document: str, question: str) -> str:
         """Use an instruct tokenizer's native format when it advertises one."""
@@ -97,3 +111,27 @@ class DocumentQABackend:
             raise ValueError(f"Unsupported reasoning mode: {mode}")
         prompt = self._direct_prompt(document, question)
         return self._generate_prompt(prompt, max_new_tokens=max_new_tokens, **gen_kwargs)
+
+
+def _hidden_vectors(hidden_states: Any) -> list[list[float]]:
+    """Best-effort extraction for HF generation's nested hidden-state layout."""
+    if hidden_states is None:
+        return []
+    result: list[list[float]] = []
+    for step in hidden_states:
+        value = step if isinstance(step, (tuple, list)) and step and isinstance(step[0], (int, float)) else (step[-1] if isinstance(step, (tuple, list)) else step)
+        try:
+            value = value[0, -1].detach().cpu().tolist()
+        except (AttributeError, IndexError, TypeError):
+            try:
+                if isinstance(value[0], (int, float)):
+                    pass
+                else:
+                    value = value[0][-1]
+            except (IndexError, TypeError):
+                continue
+        try:
+            result.append([float(x) for x in value])
+        except TypeError:
+            continue
+    return result
