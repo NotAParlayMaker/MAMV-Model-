@@ -20,15 +20,15 @@ tune for a collection.
 ## Quick start
 
 ```bash
-python -m mamv_model --document handbook.txt --question "How long is parental leave?"
+pip install -r requirements.txt
+pip install -e .
+mamv ask --doc handbook.txt --question "How long is parental leave?"
 ```
 
-For PDF input, install the optional PDF reader:
-
-```bash
-pip install -e '.[pdf]'
-python -m mamv_model --document contract.pdf --question "When does this agreement end?"
-```
+`mamv ask` accepts **PDF, DOCX, TXT/Markdown, PNG, JPEG, TIFF, and BMP**.
+PDF text is extracted per page; DOCX headings and tables are retained as logical
+units; image files use Tesseract OCR. Install the system `tesseract` binary for
+OCR (for example, `apt install tesseract-ocr`).
 
 ## Python API
 
@@ -52,15 +52,23 @@ the exact answer span when one is found. When the evidence is weak, it returns
 
 ## Design
 
-1. **Ingestion:** plain text, Markdown, HTML-like text, and optional PDFs are
-   converted to normalized passages while retaining document and passage IDs.
-2. **Retrieval:** weighted BM25-style lexical matching plus character n-gram
-   similarity finds relevant passages without external services.
+1. **Ingestion and chunking:** files are parsed into page/heading/table-aware
+   parts, then split at paragraph and row boundaries with source metadata.
+2. **Indexing and retrieval:** local `sentence-transformers` embeddings are
+   stored in a local FAISS similarity index, then fused with BM25 keyword scores
+   using reciprocal-rank fusion. Supply any object
+   implementing `encode(list[str])` to `DocumentQA(embedding_model=...)` to use
+   an API-backed embedding provider; read its API key from environment variables.
 3. **Grounded reading:** the reader selects the most relevant sentence/span
    from retrieved evidence and exposes that evidence as a citation.
 
-This is an extractive baseline. Future work can swap in dense retrieval and a
-fine-tuned generative reader while retaining the same citation-oriented API.
+This is an extractive baseline: it deliberately says no answer when retrieved
+evidence has no exact content-term overlap. There is no LLM answer generator,
+so it never sends documents or API keys to a hosted service.
+
+> **Known limitation / TODO:** scanned PDF pages need a PDF rendering OCR
+> adapter. Image scans work today; a scanned PDF currently returns an actionable
+> error rather than silently producing an ungrounded answer.
 
 ## Development
 
