@@ -8,7 +8,7 @@ from .document_qa import Answer, DocumentQABackend
 from .genericity import GenericityResult, estimate_genericity
 from .reasoning import ReasoningTrace
 from .retrieval import IntegrationBudget, Retriever, select_with_budget, InMemoryRetriever, RetrievalDiversitySettings, select_diverse, RetrievedDocument
-from .verifier import LexicalVerifier, VerificationResult
+from .verifier import EvidenceVerifier, LexicalVerifier, VerificationResult
 from .model_result import (
     MODEL_RESULT_SCHEMA_VERSION, ClaimCandidate, ConfidenceSignals, EvidenceCandidate,
     InferenceFrame, MAMVModelResult, ProposedEvidenceRelation, utc_now, build_inference_frame,
@@ -85,8 +85,9 @@ class MAMVModel:
         qa: DocumentQABackend,
         retriever: Retriever | None = None,
         require_grounding: bool = True,
+        verifier: EvidenceVerifier | None = None,
     ) -> None:
-        self.qa, self.retriever, self.verifier = qa, retriever, LexicalVerifier()
+        self.qa, self.retriever, self.verifier = qa, retriever, verifier or LexicalVerifier()
         self.require_grounding = require_grounding
 
     @classmethod
@@ -115,7 +116,7 @@ class MAMVModel:
         if integration_mode == "fragmented" and selected:
             parts = [self._ask(item.text, question, **kwargs) for item in selected]
             labels = [self.verifier.verify(part.text, [other.text for other in selected if other is not item]).label for item, part in zip(selected, parts)]
-            disagreement = len({_normalise(part.text) for part in parts}) > 1 or "not_enough_information" in labels
+            disagreement = len({_normalise(part.text) for part in parts}) > 1 or "insufficient_evidence" in labels
             fragmented_disagreement = disagreement
             text = "\n".join(f"[{item.source_id}] {part.text}" for item, part in zip(selected, parts))
             if disagreement:
@@ -129,7 +130,7 @@ class MAMVModel:
         confidence = answer.confidence
         if self.retriever and self.require_grounding:
             verification = self.verifier.verify(answer.text, [item.text for item in selected])
-            if verification.label == "not_enough_information":
+            if verification.label == "insufficient_evidence":
                 confidence = min(confidence if confidence is not None else 1.0, verification.confidence)
                 critique = "Answer not well-supported by retrieved evidence"
                 reasoning = (
@@ -175,7 +176,7 @@ class MAMVModel:
         verification = self.verifier.verify(answer.text, [item.text for item in selected])
         reasoning = answer.reasoning
         confidence = answer.confidence
-        if self.require_grounding and verification.label == "not_enough_information":
+        if self.require_grounding and verification.label == "insufficient_evidence":
             confidence = min(confidence if confidence is not None else 1.0, verification.confidence)
             critique = "Answer not well-supported by selected reading passages"
             reasoning = replace(reasoning, critiques=reasoning.critiques + (critique,)) if reasoning else ReasoningTrace(critiques=(critique,))
@@ -216,7 +217,8 @@ class MAMVModel:
         artifacts = {"base_model_id": getattr(self.qa, "model_id", type(self.qa).__name__), "requested_revision": getattr(self.qa, "requested_revision", None), "resolved_revision": getattr(self.qa, "resolved_revision", None), "adapter_id": getattr(self.qa, "adapter_id", None), "adapter_revision": getattr(self.qa, "adapter_revision", None), "tokenizer_id": getattr(getattr(self.qa, "tokenizer", None), "name_or_path", type(getattr(self.qa, "tokenizer", None)).__name__), "tokenizer_revision": getattr(self.qa, "tokenizer_revision", None), "local_config_hash": content_hash(getattr(getattr(self.qa, "model", None), "config", {}))}
         generation = {k: kwargs.get(k) for k in ("temperature", "top_p", "max_new_tokens", "seed") if k in kwargs} | {"number_of_samples": kwargs.get("n_samples", 1), "refinement_limit": kwargs.get("max_iterations", 0)}
         retrieval = {"retriever_type": type(self.retriever).__name__ if self.retriever else None, "query": question, "top_k": kwargs.get("top_k", 5), "selected_source_ids": tuple(x.source_id for x in selected), "excluded_source_ids": tuple(x.source_id for x in dropped), "retrieval_scores": {x.source_id:x.score for x in selected + dropped}, "token_budget": budget.max_tokens if budget else None, "tokens_used": budget.tokens_used if budget else None, "document_type": document_type}
-        return build_inference_frame(question=question, original_document=original, effective_context=context, selected_sources=selected, dropped_sources=dropped, model_artifacts=artifacts, retrieval_config=retrieval, generation_config=generation, reasoning_strategy=mode, integration_mode=integration_mode, integration_budget=budget, grounding_config={"verifier_type":type(self.verifier).__name__, "required":self.require_grounding, "evidence_scope":"selected_context", "limitations":("Lexical verification only.",)}, assumptions=(), limitations=("This artifact does not assert truth or create a verification verdict.",), extra_warnings=warnings)
+        verification_config = {"verifier_strategy": getattr(self.verifier, "policy", "lexical_only"), "verifier_id": getattr(self.verifier, "verifier_id", type(self.verifier).__name__), "verifier_version": getattr(self.verifier, "verifier_version", "unknown"), "required":self.require_grounding, "evidence_scope":"selected_context", "enabled_deterministic_checks": {"numeric": getattr(self.verifier, "detect_numeric_conflicts", None), "negation": getattr(self.verifier, "detect_negation_conflicts", None), "quantifier": getattr(self.verifier, "detect_quantifier_conflicts", None)}, "optional_model_identity": {"model_id": getattr(self.verifier, "model_id", None), "revision": getattr(self.verifier, "revision", None)}, "thresholds": {"lexical_overlap": 0.5}}
+        return build_inference_frame(question=question, original_document=original, effective_context=context, selected_sources=selected, dropped_sources=dropped, model_artifacts=artifacts, retrieval_config=retrieval, generation_config=generation, reasoning_strategy=mode, integration_mode=integration_mode, integration_budget=budget, grounding_config=verification_config, assumptions=(), limitations=("This artifact does not assert truth or create a verification verdict.",), extra_warnings=warnings)
 
     def education_session(self) -> EducationSession:
         return EducationSession(self)

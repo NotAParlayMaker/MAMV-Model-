@@ -110,7 +110,7 @@ def self_consistency(
     winner_index = normalised.index(winner_key)
     winner_answer, winner_trace = parsed[winner_index]
     weak = (__import__("mamv_model.verifier", fromlist=["LexicalVerifier"]).LexicalVerifier()
-            .verify(winner_answer, [document]).label == "not_enough_information")
+            .verify(winner_answer, [document]).label == "insufficient_evidence")
     notable = counts[winner_key] > 1 and weak
     reason = "Independent samples agreed on content not found in supplied evidence; review for confident hallucination." if notable else None
     return Answer(
@@ -204,7 +204,7 @@ def critique_claim(
     feedback_label = {
         "supported": "supported",
         "refuted": "contradicted",
-        "not_enough_information": "unsupported",
+        "insufficient_evidence": "unsupported",
     }[verification.label]
     critiques: list[str] = []
     for _ in range(max_iterations):

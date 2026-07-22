@@ -113,7 +113,11 @@ def model_result_from_json(payload: str) -> MAMVModelResult:
     d["confidence_signals"]=_construct(ConfidenceSignals,d["confidence_signals"])
     for k,c in (("grounding",VerificationResult),("genericity",GenericityResult),("integration_budget",IntegrationBudget),("reasoning_summary",ReasoningTrace)):
         if d.get(k) is not None:
-            if k == "grounding" and "evidence" in d[k]: d[k]["evidence"] = tuple(d[k]["evidence"])
+            if k == "grounding":
+                for key in ("evidence", "evidence_ids", "limitations"):
+                    if key in d[k]: d[k][key] = tuple(d[k][key])
+                if "component_results" in d[k]:
+                    d[k]["component_results"] = tuple(_construct(VerificationResult, {**x, **{z: tuple(x[z]) for z in ("evidence", "evidence_ids", "limitations", "component_results") if z in x}}) for x in d[k]["component_results"])
             d[k]=_construct(c,d[k])
     for k,c in (("claim_candidates",ClaimCandidate),("evidence_candidates",EvidenceCandidate),("proposed_relations",ProposedEvidenceRelation),("contradiction_candidates",ContradictionCandidate)):
         d[k]=tuple(_construct(c,{**x, **{z:tuple(x[z]) for z in ("source_ids","limitations") if z in x}}) for x in d.get(k,()))

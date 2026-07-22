@@ -48,6 +48,26 @@ class ReasoningConfig:
     integration_mode: Literal["fragmented", "integrated"] = "integrated"
     integration_max_tokens: int | None = None
 
+@dataclass(frozen=True)
+class LexicalVerificationConfig:
+    enabled: bool = True
+
+@dataclass(frozen=True)
+class EntailmentVerificationConfig:
+    enabled: bool = False
+    model_id: str | None = None
+    revision: str | None = None
+
+@dataclass(frozen=True)
+class VerificationConfig:
+    strategy: Literal["conservative", "lexical_only", "entailment_only", "require_agreement"] = "conservative"
+    lexical: LexicalVerificationConfig = field(default_factory=LexicalVerificationConfig)
+    entailment: EntailmentVerificationConfig = field(default_factory=EntailmentVerificationConfig)
+    atomic_claims: bool = True
+    detect_numeric_conflicts: bool = True
+    detect_negation_conflicts: bool = True
+    detect_quantifier_conflicts: bool = True
+
 
 @dataclass(frozen=True)
 class MAMVConfig:
@@ -56,6 +76,7 @@ class MAMVConfig:
     training: TrainingConfig = field(default_factory=TrainingConfig)
     data: dict[str, Any] = field(default_factory=dict)
     reasoning: ReasoningConfig = field(default_factory=ReasoningConfig)
+    verification: VerificationConfig = field(default_factory=VerificationConfig)
 
 
 def reasoning_answer_kwargs(reasoning: ReasoningConfig) -> dict[str, Any]:
@@ -89,4 +110,9 @@ def load_config(path: str | Path) -> MAMVConfig:
         training=TrainingConfig(**raw.get("training", {})),
         data=raw.get("data", {}),
         reasoning=ReasoningConfig(**raw.get("reasoning", {})),
+        verification=VerificationConfig(
+            **{**raw.get("verification", {}),
+               "lexical": LexicalVerificationConfig(**raw.get("verification", {}).get("lexical", {})),
+               "entailment": EntailmentVerificationConfig(**raw.get("verification", {}).get("entailment", {}))}
+        ),
     )
