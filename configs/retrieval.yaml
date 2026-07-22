@@ -1,0 +1,3 @@
+_base: base.yaml
+model: {task: retrieval}
+data: {query_field: query, positive_field: positive, negative_field: negative}

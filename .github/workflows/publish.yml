@@ -1,0 +1,17 @@
+name: Publish
+on:
+  workflow_dispatch:
+    inputs:
+      model_dir: {description: 'Real checkpoint directory', required: true, default: 'outputs/mamv'}
+      repo_id: {description: 'Hugging Face repo ID', required: true}
+      revision: {description: 'Version tag', required: true, default: 'v1.0'}
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -e '.[publish]'
+      - run: python scripts/publish_to_huggingface.py --model-dir '${{ inputs.model_dir }}' --repo-id '${{ inputs.repo_id }}' --revision '${{ inputs.revision }}'
+        env: {HF_TOKEN: '${{ secrets.HF_TOKEN }}'}
