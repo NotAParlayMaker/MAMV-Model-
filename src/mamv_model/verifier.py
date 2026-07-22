@@ -6,7 +6,7 @@ They never establish a MAMV trust verdict.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable, Literal, Protocol, Sequence
 
 from .genericity import estimate_genericity
@@ -16,6 +16,15 @@ if TYPE_CHECKING:
 
 VerificationLabel = Literal["supported", "contradicted", "insufficient_evidence", "ambiguous"]
 EvidenceCoverage = Literal["fully_supported", "partially_supported", "unsupported", "contradicted", "mixed"]
+
+
+@dataclass(frozen=True)
+class VerifierCapability:
+    """Declared boundary for a verifier's candidate, model-layer output."""
+
+    allowed_claim_types: tuple[str, ...]
+    allowed_methods: tuple[str, ...]
+    prohibited_assertions: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -150,6 +159,67 @@ class EntailmentVerifier:
             if raw is None or trial.confidence > raw.confidence: raw, best = trial, text
         if raw is None: raw = VerificationResult("insufficient_evidence", 0.0, ())
         return VerificationResult(raw.label, raw.confidence, (best,) if best else (), self.verifier_id, self.verifier_version, getattr(frame, "frame_id", None), claim, ids, raw.label, raw.confidence if raw.label == "supported" else 0.0, raw.confidence if raw.label == "contradicted" else 0.0, raw.confidence if raw.label == "insufficient_evidence" else 0.0, raw.limitations, (raw,), "Injected entailment backend result.", raw.coverage)
+
+
+class DistillationWatermarkVerifier:
+    """Adapter for bounded watermark-statistical detection observations.
+
+    The injected detector must inspect the supplied output sample only and return
+    ``(detected, confidence)`` or a mapping with matching keys. Its output is
+    limited to the configured detector's observation.
+    """
+
+    verifier_id = "distillation-watermark-v1"
+    verifier_version = "1"
+    capability = VerifierCapability(
+        allowed_claim_types=("model_provenance",),
+        allowed_methods=("watermark_statistical_detection",),
+        prohibited_assertions=(
+            "cannot prove direct training on our outputs vs. incidental corpus overlap",
+            "cannot establish intent or authorization",
+            "cannot prove the absence of distillation, only its statistical absence in this sample",
+        ),
+    )
+
+    def __init__(self, detector: Callable[[str], Any] | None = None) -> None:
+        self.detector = detector
+
+    def verify(
+        self, claim: str, evidence: Sequence["EvidenceCandidate | str"], *, frame: "InferenceFrame | None" = None,
+    ) -> VerificationResult:
+        texts, ids = _evidence(evidence)
+        sample = "\n".join(texts)
+        common = (
+            "Watermark detection is a statistical observation on the supplied sample, not a MAMV or MAMV-IR decision.",
+            "The result is limited to the configured detector output and supplied sample.",
+        )
+        if self.detector is None:
+            return VerificationResult(
+                "insufficient_evidence", 0.0, (), self.verifier_id, self.verifier_version,
+                getattr(frame, "frame_id", None), claim, ids, "insufficient_evidence", 0.0, 0.0, 1.0,
+                common + ("No watermark statistical detector was configured; no result was fabricated.",), (),
+                "No watermark-statistical observation was produced.", "unsupported",
+            )
+        raw = self.detector(sample)
+        if isinstance(raw, tuple):
+            detected, confidence = raw
+        elif isinstance(raw, dict):
+            detected, confidence = raw.get("detected", False), raw.get("confidence", 0.0)
+        else:
+            raise TypeError("Watermark detector must return (detected, confidence) or a mapping.")
+        confidence = max(0.0, min(float(confidence), 1.0))
+        if bool(detected):
+            label, coverage = "supported", "fully_supported"
+            summary = "Configured watermark-statistical detector reported a signal in the supplied sample."
+        else:
+            label, coverage = "insufficient_evidence", "unsupported"
+            summary = "Configured watermark-statistical detector did not report a signal in the supplied sample."
+        return VerificationResult(
+            label, confidence, tuple(texts), self.verifier_id, self.verifier_version,
+            getattr(frame, "frame_id", None), claim, ids, label,
+            confidence if label == "supported" else 0.0, 0.0,
+            confidence if label == "insufficient_evidence" else 0.0, common, (), summary, coverage,
+        )
 
 
 class CompositeVerifier:
