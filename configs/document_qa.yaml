@@ -1,3 +1,16 @@
 _base: base.yaml
-model: {task: document_qa}
-data: {prompt_template: "Document:\n{document}\n\nQuestion: {question}\nAnswer:"}
+model:
+  task: document_qa
+  # Qwen2.5-0.5B-Instruct is released under Apache-2.0.
+  base_model: Qwen/Qwen2.5-0.5B-Instruct
+data:
+  train_file: datasets/squad_train.jsonl
+  validation_file: datasets/squad_validation.jsonl
+  prompt_template: "Document:\n{document}\n\nQuestion: {question}\nAnswer: {answer}"
+  use_chat_template: true
+  max_length: 256
+training:
+  # Small reproducible default; increase the SQuAD limits/epochs for a release run.
+  num_train_epochs: 1
+  per_device_train_batch_size: 1
+  gradient_accumulation_steps: 1

@@ -3,7 +3,9 @@ from __future__ import annotations
 from collections import deque
 
 from mamv_model import MAMVModel
+from mamv_model.config import ReasoningConfig, reasoning_answer_kwargs
 from mamv_model.document_qa import Answer
+from mamv_model.document_qa import DocumentQABackend
 from mamv_model.reasoning import parse_cot_response, self_consistency, self_refine
 from mamv_model.retrieval import InMemoryRetriever
 from mamv_model.verifier import VerificationResult
@@ -17,6 +19,32 @@ class FakeBackend:
     def answer(self, document: str, question: str, **kwargs: object) -> Answer:
         self.calls.append((document, question))
         return Answer(self.responses.popleft())
+
+
+class FakeInputIds(list[int]):
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (1, len(self))
+
+
+class FakeTokenizer:
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def __call__(self, prompt: str, return_tensors: str) -> dict[str, FakeInputIds]:
+        assert return_tensors == "pt"
+        self.prompts.append(prompt)
+        return {"input_ids": FakeInputIds([1, 2, 3])}
+
+    def decode(self, tokens: object, skip_special_tokens: bool) -> str:
+        assert skip_special_tokens
+        return "Reasoning:\n- stated evidence\nAnswer: Blue\nConfidence (0-1): 0.9"
+
+
+class FakeGenerationModel:
+    def generate(self, **kwargs: object) -> list[list[int]]:
+        assert "input_ids" in kwargs
+        return [[1, 2, 3, 4]]
 
 
 def test_parse_cot_response_extracts_fields_and_handles_malformed_response():
@@ -37,6 +65,17 @@ Confidence (0-1): 0.75
     assert malformed_answer == "uncertain"
     assert malformed_trace.self_confidence is None
     assert malformed_trace.steps == ()
+
+
+def test_cot_sends_one_complete_prompt_to_the_real_generation_path():
+    tokenizer = FakeTokenizer()
+    backend = DocumentQABackend(FakeGenerationModel(), tokenizer)
+    answer = backend.answer("The color is blue.", "What color?", mode="cot")
+    assert answer.text == "Blue"
+    assert len(tokenizer.prompts) == 1
+    prompt = tokenizer.prompts[0]
+    assert prompt.count("Document:\nThe color is blue.") == 1
+    assert "Question: Document:" not in prompt
 
 
 def test_self_consistency_selects_majority_and_retains_all_traces():
@@ -79,3 +118,14 @@ def test_mamv_answer_downgrades_and_records_ungrounded_retrieval_answer():
     assert answer.confidence == 0.2
     assert answer.reasoning is not None
     assert "not well-supported" in answer.reasoning.critiques[0]
+
+
+def test_reasoning_sample_count_changes_backend_runtime_calls():
+    one = FakeBackend(["Answer: blue"])
+    one_config = ReasoningConfig(strategy="self_consistency", num_samples=1)
+    MAMVModel(one).answer("blue", "color?", **reasoning_answer_kwargs(one_config))
+    three = FakeBackend(["Answer: blue", "Answer: blue", "Answer: red"])
+    three_config = ReasoningConfig(strategy="self_consistency", num_samples=3)
+    MAMVModel(three).answer("blue", "color?", **reasoning_answer_kwargs(three_config))
+    assert len(one.calls) == 1
+    assert len(three.calls) == 3

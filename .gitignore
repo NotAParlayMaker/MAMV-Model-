@@ -17,3 +17,5 @@ wandb/
 *.ckpt
 tokenizer.json
 tokenizer.model
+datasets/squad_train.jsonl
+datasets/squad_validation.jsonl
