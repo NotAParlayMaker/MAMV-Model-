@@ -75,7 +75,12 @@ python scripts/publish_to_huggingface.py --model-dir outputs/mamv --repo-id YOUR
 The script authenticates, validates required release material, creates the repo if needed, and uploads that folder at tag/revision `v1.0`. The manual GitHub workflow performs the same protected-token flow.
 
 ## Roadmap
-Vision-language models, OCR, long-context models, agent verification, multi-document reasoning, education verification, evidence grounding, and genericity verification.
+Implemented: v1 local reading ingestion for text, Markdown, text-extractable PDF, and DOCX;
+paragraph/sentence-aware chunking with PDF page locations; and feedback-only education verification
+with source traces and separate confidence fields. See [Education use](docs/EDUCATION_USE.md).
+
+Still planned: OCR (scanned/image-only PDFs are rejected), vision-language models, long-context
+models, agent verification, and multi-document reasoning.
 
 ## License
 [MIT](LICENSE). See [MODEL_CARD.md](MODEL_CARD.md) for model-use guidance.

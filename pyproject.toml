@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "MAMV contributors"}]
-dependencies = ["pyyaml>=6.0", "numpy>=1.26"]
+dependencies = ["pyyaml>=6.0", "numpy>=1.26", "pypdf>=4.0", "python-docx>=1.1"]
 
 [project.optional-dependencies]
 training = ["torch>=2.2", "transformers>=4.41", "datasets>=2.19", "peft>=0.11", "accelerate>=0.30"]

@@ -19,6 +19,7 @@ class ReasoningTrace:
     critiques: tuple[str, ...] = ()
     self_confidence: float | None = None
     sample_traces: tuple["ReasoningTrace", ...] = ()
+    verification_label: str | None = None
 
 
 class AnswerBackend(Protocol):
@@ -166,4 +167,41 @@ def self_refine(
             self_confidence=prior.self_confidence if prior else None,
             sample_traces=prior.sample_traces if prior else (),
         ),
+    )
+
+
+def critique_claim(
+    backend: AnswerBackend,
+    document: str,
+    claim: str,
+    max_iterations: int = 2,
+    **gen_kwargs: Any,
+) -> ReasoningTrace:
+    """Give evidence feedback on student writing, without ever revising it."""
+    if max_iterations < 0:
+        raise ValueError("max_iterations must not be negative")
+    from .verifier import LexicalVerifier
+
+    verification = LexicalVerifier().verify(claim, [document])
+    feedback_label = {
+        "supported": "supported",
+        "refuted": "contradicted",
+        "not_enough_information": "unsupported",
+    }[verification.label]
+    critiques: list[str] = []
+    for _ in range(max_iterations):
+        prompt = (
+            "Identify unsupported, contradicted, or missing-evidence parts of this student claim. "
+            "Give feedback only; do not rewrite the claim.\n\n"
+            f"Document:\n{document}\n\nStudent claim:\n{claim}"
+        )
+        critique = backend.answer(document, prompt, **gen_kwargs).text.strip()
+        critiques.append(critique)
+        if re.search(r"\bno issues?(?: found)?\b", critique, re.IGNORECASE):
+            break
+    return ReasoningTrace(
+        steps=("Student submission retained without revision.",),
+        critiques=tuple(critiques),
+        self_confidence=verification.confidence,
+        verification_label=feedback_label,
     )
