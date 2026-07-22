@@ -3,12 +3,15 @@
 from __future__ import annotations
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, Literal
 from .document_qa import Answer, DocumentQABackend
 from .genericity import GenericityResult, estimate_genericity
 from .reasoning import ReasoningTrace
-from .retrieval import Retriever
+from .retrieval import IntegrationBudget, Retriever, select_with_budget
 from .verifier import LexicalVerifier, VerificationResult
+
+if TYPE_CHECKING:
+    from .session import ConversationSession
 
 
 @dataclass(frozen=True)
@@ -91,14 +94,32 @@ class MAMVModel:
             require_grounding=require_grounding,
         )
 
-    def answer(self, document: str, question: str, **kwargs: Any) -> Answer:
+    def answer(
+        self, document: str, question: str, *, integration_mode: Literal["fragmented", "integrated"] = "integrated",
+        integration_max_tokens: int | None = None, **kwargs: Any,
+    ) -> Answer:
         sources = self.retriever.retrieve(question) if self.retriever else []
-        context = "\n\n".join(item.text for item in sources) or document
-        answer = self.qa.answer(context, question, **kwargs)
+        selected = sources
+        budget = None
+        if sources and integration_max_tokens is not None:
+            selected, budget = select_with_budget(sources, integration_max_tokens)
+        context = "\n\n".join(item.text for item in selected) or document
+        if integration_mode == "fragmented" and selected:
+            parts = [self._ask(item.text, question, **kwargs) for item in selected]
+            labels = [self.verifier.verify(part.text, [other.text for other in selected if other is not item]).label for item, part in zip(selected, parts)]
+            disagreement = len({_normalise(part.text) for part in parts}) > 1 or "not_enough_information" in labels
+            text = "\n".join(f"[{item.source_id}] {part.text}" for item, part in zip(selected, parts))
+            if disagreement:
+                text = "Per-chunk answers disagree; human review required:\n" + text
+            answer = Answer(text, confidence=None, reasoning=ReasoningTrace(critiques=("Per-chunk answers disagree" if disagreement else "Per-chunk answers are lexically consistent",)))
+        elif integration_mode == "integrated":
+            answer = self._ask(context, question, **kwargs)
+        else:
+            raise ValueError(f"Unsupported integration mode: {integration_mode}")
         reasoning = answer.reasoning
         confidence = answer.confidence
         if self.retriever and self.require_grounding:
-            verification = self.verifier.verify(answer.text, [item.text for item in sources])
+            verification = self.verifier.verify(answer.text, [item.text for item in selected])
             if verification.label == "not_enough_information":
                 confidence = min(confidence if confidence is not None else 1.0, verification.confidence)
                 critique = "Answer not well-supported by retrieved evidence"
@@ -107,7 +128,8 @@ class MAMVModel:
                     if reasoning
                     else ReasoningTrace(critiques=(critique,))
                 )
-        return Answer(answer.text, confidence, tuple(item.source_id for item in sources), reasoning)
+        return Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning, budget,
+                      answer.notable_convergence, answer.notable_convergence_reason)
 
     def answer_file(self, path: str | Path, question: str, **kwargs: Any) -> Answer:
         """Answer from a local course reading with chunk locations as sources."""
@@ -145,8 +167,27 @@ class MAMVModel:
     def education_session(self) -> EducationSession:
         return EducationSession(self)
 
+    def conversation_session(self, document: str, *, max_tokens: int = 512) -> "ConversationSession":
+        from .session import ConversationSession
+        return ConversationSession(self, document, max_tokens=max_tokens)
+
+    def _ask(self, document: str, question: str, **kwargs: Any) -> Answer:
+        """Apply reasoning strategies for minimal backend test doubles as well as HF backends."""
+        mode = kwargs.get("mode", "direct")
+        if not isinstance(self.qa, DocumentQABackend) and mode in {"self_consistency", "self_refine"}:
+            from .reasoning import self_consistency, self_refine
+            copied = dict(kwargs)
+            copied.pop("mode", None)
+            return (self_consistency(self.qa, document, question, **copied)
+                    if mode == "self_consistency" else self_refine(self.qa, document, question, **copied))
+        return self.qa.answer(document, question, **kwargs)
+
     def verify_claim(self, claim: str, evidence: list[str]) -> VerificationResult:
         return self.verifier.verify(claim, evidence)
 
 
-__all__ = ["Answer", "EducationAnswer", "EducationSession", "GenericityResult", "MAMVModel", "ReasoningTrace", "estimate_genericity"]
+def _normalise(text: str) -> str:
+    return " ".join(text.casefold().split())
+
+
+__all__ = ["Answer", "EducationAnswer", "EducationSession", "GenericityResult", "IntegrationBudget", "MAMVModel", "ReasoningTrace", "estimate_genericity"]
