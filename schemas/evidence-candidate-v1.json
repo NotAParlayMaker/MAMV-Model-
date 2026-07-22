@@ -1,0 +1,1 @@
+{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","required":["evidence_id","source_id","text_hash","selected","frame_id","limitations"],"properties":{"evidence_id":{"type":"string"},"source_id":{"type":"string"},"text_hash":{"type":"string"},"selected":{"type":"boolean"},"frame_id":{"type":"string"}}}
