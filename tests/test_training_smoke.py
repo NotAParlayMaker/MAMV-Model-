@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+pytestmark = pytest.mark.training
+
 
 def test_tiny_random_causal_lm_lora_train_and_save(tmp_path: Path) -> None:
     transformers = pytest.importorskip("transformers")

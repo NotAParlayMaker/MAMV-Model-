@@ -12,6 +12,7 @@ class ModelConfig:
     base_model: str | None = None
     task: str = "document_qa"
     trust_remote_code: bool = False
+    revision: str | None = None
 
 
 @dataclass(frozen=True)

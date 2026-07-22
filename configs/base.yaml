@@ -2,6 +2,7 @@ model:
   base_model: null # Required: a real Hugging Face model ID or local model directory.
   task: document_qa
   trust_remote_code: false
+  revision: null
 training:
   output_dir: outputs/mamv
   seed: 42

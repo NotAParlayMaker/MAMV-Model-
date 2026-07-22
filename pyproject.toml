@@ -13,7 +13,7 @@ authors = [{name = "MAMV contributors"}]
 dependencies = ["pyyaml>=6.0", "numpy>=1.26", "pypdf>=4.0", "python-docx>=1.1"]
 
 [project.optional-dependencies]
-training = ["torch>=2.2", "transformers>=4.41", "datasets>=2.19", "peft>=0.11", "accelerate>=0.30"]
+training = ["torch>=2.2", "transformers>=4.41", "datasets>=2.19,<3", "dill>=0.3.7,<0.3.9", "peft>=0.11", "accelerate>=0.30"]
 publish = ["huggingface-hub>=0.23"]
 dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
 
@@ -31,3 +31,4 @@ mypy_path = "src"
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]
+markers = ["training: offline Trainer integration smoke test"]

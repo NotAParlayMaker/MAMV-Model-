@@ -1,0 +1,1 @@
+{"type":"object","required":["schema_version","frame","summary_metrics","sample_counts","limitations"]}

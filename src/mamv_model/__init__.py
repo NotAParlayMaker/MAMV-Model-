@@ -270,3 +270,4 @@ def _normalise(text: str) -> str:
 
 
 __all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "ProposedEvidenceRelation", "ReasoningTrace", "build_inference_frame", "compare_inference_frames", "estimate_genericity"]
+from .provenance import compare_evaluation_reports
