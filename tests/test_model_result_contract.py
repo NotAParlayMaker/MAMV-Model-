@@ -24,7 +24,7 @@ def _result():
 def test_portable_result_round_trip_and_candidate_labels() -> None:
     result = _result()
     data = json.loads(model_result_to_json(result))
-    assert data["schema_version"] == "mamv-model-result/v1"
+    assert data["schema_version"] == "mamv-model-result/v2"
     assert model_result_from_json(json.dumps(data)) == result
     assert result.claim_candidates[0].status == "unverified"
     assert all(item.status == "model_proposed" for item in result.proposed_relations)

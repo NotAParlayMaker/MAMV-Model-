@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 from dataclasses import dataclass, replace
-import hashlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 from .document_qa import Answer, DocumentQABackend
@@ -12,7 +11,8 @@ from .retrieval import IntegrationBudget, Retriever, select_with_budget
 from .verifier import LexicalVerifier, VerificationResult
 from .model_result import (
     MODEL_RESULT_SCHEMA_VERSION, ClaimCandidate, ConfidenceSignals, EvidenceCandidate,
-    InferenceFrame, MAMVModelResult, ProposedEvidenceRelation, utc_now,
+    InferenceFrame, MAMVModelResult, ProposedEvidenceRelation, utc_now, build_inference_frame,
+    content_hash, FrameWarning, compare_inference_frames, make_frame_transition,
 )
 
 if TYPE_CHECKING:
@@ -30,6 +30,7 @@ class EducationAnswer:
     consensus_confidence: float | None
     grounding_confidence: float | None
     grounding_status: str
+    inference_frame: InferenceFrame | None = None
 
 
 class EducationSession:
@@ -58,6 +59,7 @@ class EducationSession:
             consensus_confidence=consensus,
             grounding_confidence=verification.confidence,
             grounding_status=verification.label,
+            inference_frame=answer.inference_frame,
         )
 
     def answer_file(self, path: str | Path, question: str, **kwargs: Any) -> EducationAnswer:
@@ -71,7 +73,7 @@ class EducationSession:
         return EducationAnswer(
             result.text, trace, result.sources or (str(path),), trace.self_confidence,
             result.confidence if kwargs.get("mode") == "self_consistency" else None,
-            verification.confidence, verification.label,
+            verification.confidence, verification.label, result.inference_frame,
         )
 
 
@@ -109,10 +111,12 @@ class MAMVModel:
         if sources and integration_max_tokens is not None:
             selected, budget = select_with_budget(sources, integration_max_tokens)
         context = "\n\n".join(item.text for item in selected) or document
+        fragmented_disagreement = False
         if integration_mode == "fragmented" and selected:
             parts = [self._ask(item.text, question, **kwargs) for item in selected]
             labels = [self.verifier.verify(part.text, [other.text for other in selected if other is not item]).label for item, part in zip(selected, parts)]
             disagreement = len({_normalise(part.text) for part in parts}) > 1 or "not_enough_information" in labels
+            fragmented_disagreement = disagreement
             text = "\n".join(f"[{item.source_id}] {part.text}" for item, part in zip(selected, parts))
             if disagreement:
                 text = "Per-chunk answers disagree; human review required:\n" + text
@@ -133,8 +137,16 @@ class MAMVModel:
                     if reasoning
                     else ReasoningTrace(critiques=(critique,))
                 )
+        dropped = [item for item in sources if item not in selected]
+        warnings = ([FrameWarning("FRAGMENTED_DISAGREEMENT", "Per-chunk answers disagree.", "inference.integration_mode")] if fragmented_disagreement else [])
+        mode = str(kwargs.get("mode", "direct"))
+        frame = self._frame(document, question, context, selected, dropped, mode=mode, integration_mode=integration_mode, budget=budget, kwargs=kwargs, warnings=tuple(warnings))
+        transition = None
+        if mode == "self_refine":
+            initial = self._frame(document, question, context, selected, dropped, mode="direct", integration_mode=integration_mode, budget=budget, kwargs=kwargs)
+            transition = make_frame_transition(initial, frame, "self_refinement", answer_changed=True, explanation="The answer was revised after model self-critique.")
         return Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning, budget,
-                      answer.notable_convergence, answer.notable_convergence_reason)
+                      answer.notable_convergence, answer.notable_convergence_reason, frame, transition)
 
     def answer_file(self, path: str | Path, question: str, **kwargs: Any) -> Answer:
         """Answer from a local course reading with chunk locations as sources."""
@@ -159,7 +171,7 @@ class MAMVModel:
         if not selected:
             selected = InMemoryRetriever(chunk_map).retrieve(question, top_k=min(3, len(chunk_map)))
         context = "\n\n".join(item.text for item in selected)
-        answer = self.qa.answer(context, question, **kwargs)
+        answer = self._ask(context, question, **kwargs)
         verification = self.verifier.verify(answer.text, [item.text for item in selected])
         reasoning = answer.reasoning
         confidence = answer.confidence
@@ -167,7 +179,14 @@ class MAMVModel:
             confidence = min(confidence if confidence is not None else 1.0, verification.confidence)
             critique = "Answer not well-supported by selected reading passages"
             reasoning = replace(reasoning, critiques=reasoning.critiques + (critique,)) if reasoning else ReasoningTrace(critiques=(critique,))
-        return Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning)
+        frame = self._frame(reading, question, context, selected, [], mode=str(kwargs.get("mode", "direct")), integration_mode="integrated", budget=None, kwargs=kwargs, document_type=Path(path).suffix.lstrip(".") or "text")
+        return Answer(answer.text, confidence, tuple(item.source_id for item in selected), reasoning, None, answer.notable_convergence, answer.notable_convergence_reason, frame)
+
+    def _frame(self, original: str, question: str, context: str, selected: list[Any], dropped: list[Any], *, mode: str, integration_mode: str, budget: IntegrationBudget | None, kwargs: dict[str, Any], warnings: tuple[FrameWarning, ...] = (), document_type: str | None = None) -> InferenceFrame:
+        artifacts = {"base_model_id": getattr(self.qa, "model_id", type(self.qa).__name__), "requested_revision": getattr(self.qa, "requested_revision", None), "resolved_revision": getattr(self.qa, "resolved_revision", None), "adapter_id": getattr(self.qa, "adapter_id", None), "adapter_revision": getattr(self.qa, "adapter_revision", None), "tokenizer_id": getattr(getattr(self.qa, "tokenizer", None), "name_or_path", type(getattr(self.qa, "tokenizer", None)).__name__), "tokenizer_revision": getattr(self.qa, "tokenizer_revision", None), "local_config_hash": content_hash(getattr(getattr(self.qa, "model", None), "config", {}))}
+        generation = {k: kwargs.get(k) for k in ("temperature", "top_p", "max_new_tokens", "seed") if k in kwargs} | {"number_of_samples": kwargs.get("n_samples", 1), "refinement_limit": kwargs.get("max_iterations", 0)}
+        retrieval = {"retriever_type": type(self.retriever).__name__ if self.retriever else None, "query": question, "top_k": kwargs.get("top_k", 5), "selected_source_ids": tuple(x.source_id for x in selected), "excluded_source_ids": tuple(x.source_id for x in dropped), "retrieval_scores": {x.source_id:x.score for x in selected + dropped}, "token_budget": budget.max_tokens if budget else None, "tokens_used": budget.tokens_used if budget else None, "document_type": document_type}
+        return build_inference_frame(question=question, original_document=original, effective_context=context, selected_sources=selected, dropped_sources=dropped, model_artifacts=artifacts, retrieval_config=retrieval, generation_config=generation, reasoning_strategy=mode, integration_mode=integration_mode, integration_budget=budget, grounding_config={"verifier_type":type(self.verifier).__name__, "required":self.require_grounding, "evidence_scope":"selected_context", "limitations":("Lexical verification only.",)}, assumptions=(), limitations=("This artifact does not assert truth or create a verification verdict.",), extra_warnings=warnings)
 
     def education_session(self) -> EducationSession:
         return EducationSession(self)
@@ -201,17 +220,8 @@ class MAMVModel:
         selected_ids = answer.sources
         selected = [item for item in retrieved if item.source_id in selected_ids]
         excluded = [item for item in retrieved if item.source_id not in selected_ids]
-        context = "\n\n".join(item.text for item in selected) or document
         mode = str(kwargs.get("mode", "direct"))
-        frame_seed = f"{type(self.qa).__name__}|{question}|{context}|{mode}"
-        frame = InferenceFrame(
-            frame_id="frame-" + hashlib.sha256(frame_seed.encode()).hexdigest()[:16],
-            model_id=type(self.qa).__name__, visible_source_ids=selected_ids,
-            excluded_source_ids=tuple(item.source_id for item in excluded), reasoning_strategy=mode,
-            grounding_required=self.require_grounding, answer_revised=mode == "self_refine",
-            multiple_samples_agreed=bool(answer.notable_convergence or mode == "self_consistency"),
-            context_hash=hashlib.sha256(context.encode()).hexdigest(),
-        )
+        frame = answer.inference_frame or self._frame(document, question, document, selected, excluded, mode=mode, integration_mode=str(kwargs.get("integration_mode", "integrated")), budget=answer.integration_budget, kwargs=kwargs)
         grounding = self.verifier.verify(answer.text, [item.text for item in selected]) if selected else None
         # Do not export trace steps: they can contain private model scratchwork.
         trace = answer.reasoning
@@ -232,7 +242,7 @@ class MAMVModel:
             all_items = [(item, True, None) for item in selected] + [
                 (item, False, "excluded_from_context") for item in excluded]
             evidence = tuple(EvidenceCandidate(
-                f"evidence-{index}", item.source_id, hashlib.sha256(item.text.encode()).hexdigest(), None,
+                f"evidence-{index}", item.source_id, content_hash(item.text), getattr(item, "source_location", None),
                 item.score, selected_flag, dropped, frame.frame_id,
                 ("Retrieval score is not evidence support.",),
             ) for index, (item, selected_flag, dropped) in enumerate(all_items, 1))
@@ -243,15 +253,15 @@ class MAMVModel:
                 ("Model-proposed only; MAMV verification is required.",),
             ) for item in evidence)
         # Analyzers are deliberately optional and their outputs are warning-only metadata.
-        warnings = tuple(f"Semantic analyzer available: {analyzer.__class__.__name__}" for analyzer in semantic_analyzers)
+        warnings = frame.warnings + tuple(FrameWarning("GROUNDING_SCOPE_LIMITED", f"Semantic analyzer available: {analyzer.__class__.__name__}", "semantic_analyzers", "info") for analyzer in semantic_analyzers)
         return MAMVModelResult(
-            MODEL_RESULT_SCHEMA_VERSION, "result-" + hashlib.sha256(frame_seed.encode()).hexdigest()[:16],
+            MODEL_RESULT_SCHEMA_VERSION, "result-" + content_hash({"frame_id": frame.frame_id, "answer": answer.text})[:24],
             answer.text, selected_ids, frame, summary,
             ConfidenceSignals(answer.confidence, trace.self_confidence if trace else None,
                               answer.confidence if mode == "self_consistency" else None,
                               grounding.confidence if grounding else None),
             grounding, estimate_genericity(answer.text), answer.integration_budget,
-            warnings, tuple(limitations), utc_now(), claims, evidence, relations,
+            warnings, tuple(limitations), utc_now(), claims, evidence, relations, answer.frame_transition,
         )
 
 
@@ -259,4 +269,4 @@ def _normalise(text: str) -> str:
     return " ".join(text.casefold().split())
 
 
-__all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "ProposedEvidenceRelation", "ReasoningTrace", "estimate_genericity"]
+__all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "ProposedEvidenceRelation", "ReasoningTrace", "build_inference_frame", "compare_inference_frames", "estimate_genericity"]
