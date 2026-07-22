@@ -1,0 +1,3 @@
+_base: base.yaml
+model: {task: genericity}
+data: {text_field: text, label_field: genericity_label}

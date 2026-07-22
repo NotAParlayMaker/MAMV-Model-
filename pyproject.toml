@@ -5,30 +5,26 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mamv-model"
 version = "0.1.0"
-description = "Grounded document question answering with inspectable baseline weights"
+description = "Training and evaluation toolkit for MAMV document understanding models"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
-authors = [{name = "MAMV-Model contributors"}]
-dependencies = [
-    "faiss-cpu==1.11.0",
-    "numpy==2.3.2",
-    "Pillow==11.3.0",
-    "pypdf==5.9.0",
-    "pytesseract==0.3.13",
-    "python-docx==1.2.0",
-    "sentence-transformers==5.0.0",
-]
+authors = [{name = "MAMV contributors"}]
+dependencies = ["pyyaml>=6.0", "numpy>=1.26"]
 
 [project.optional-dependencies]
-pdf = []
+training = ["torch>=2.2", "transformers>=4.41", "datasets>=2.19", "peft>=0.11", "accelerate>=0.30"]
+publish = ["huggingface-hub>=0.23"]
+dev = ["pytest>=8", "ruff>=0.5", "mypy>=1.10"]
 
-[project.scripts]
-mamv = "mamv_model.cli:main"
+[tool.setuptools.packages.find]
+where = ["src"]
 
-[tool.setuptools]
-packages = ["mamv_model"]
-include-package-data = true
+[tool.ruff]
+line-length = 100
+target-version = "py310"
 
-[tool.setuptools.package-data]
-mamv_model = ["weights/*.json"]
+[tool.mypy]
+python_version = "3.10"
+strict = true
+mypy_path = "src"

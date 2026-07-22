@@ -1,0 +1,15 @@
+name: Train
+on:
+  workflow_dispatch:
+    inputs: {config: {description: 'Config path', required: true, default: 'configs/document_qa.yaml'}}
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install -e '.[training]'
+      - run: python scripts/train.py --config '${{ inputs.config }}'
+      - uses: actions/upload-artifact@v4
+        with: {name: mamv-checkpoints, path: outputs/}

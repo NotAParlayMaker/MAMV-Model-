@@ -1,0 +1,26 @@
+model:
+  base_model: null # Required: a real Hugging Face model ID or local model directory.
+  task: document_qa
+  trust_remote_code: false
+training:
+  output_dir: outputs/mamv
+  seed: 42
+  num_train_epochs: 3
+  per_device_train_batch_size: 2
+  per_device_eval_batch_size: 2
+  learning_rate: 0.0002
+  gradient_accumulation_steps: 8
+  gradient_checkpointing: true
+  fp16: false
+  bf16: false
+  resume_from_checkpoint: null
+adapter:
+  enabled: true
+  method: lora # lora or qlora
+  r: 16
+  alpha: 32
+  dropout: 0.05
+data:
+  train_file: datasets/sample_dataset.jsonl
+  validation_file: datasets/sample_dataset.jsonl
+  max_length: 1024

@@ -1,81 +1,57 @@
-# MAMV-Model
+# MAMV Model
 
-**MAMV** (Multimodal-Aware, Metadata-Verified) is a lightweight, open-source
-document question-answering baseline. It retrieves the most relevant passages
-from structured and unstructured documents, then returns an extractive answer
-with source citations so results stay grounded in the supplied material.
+The official model-development repository for **MAMV**'s document understanding and verification stack. It provides configuration-driven training, evaluation, inference, export, and publication tooling—not invented artifacts. No model weights, checkpoints, or tokenizer files are committed here.
 
-The repository is deliberately small and dependency-light for research,
-experimentation, enterprise search prototypes, and document-analysis agents.
+## MAMV integration
+`MAMVModel` is the application-facing API for document QA, optional retrieval context and source IDs, genericity/quantifier analysis, and claim verification. Model backends use Hugging Face AutoModel interfaces, so deployments are not tied to any one model family.
 
-## Included weights
+## Layout
+- `src/mamv_model/`: typed inference, retrieval, verification, genericity, metrics, and config modules.
+- `configs/`: base and task-specific training configuration.
+- `datasets/`: documented JSONL schema example only.
+- `scripts/`: train, evaluate, inference, export, and Hub publication entry points.
+- `evals/`: small checked-in evaluation fixtures and benchmark runner.
 
-The repository ships with `mamv_model/weights/mamv-base.json`, a versioned,
-deterministic set of ranking and answer-selection weights used by the default
-pipeline. They are loaded automatically and are included in source
-distributions. These are baseline heuristic weights—not a claim of a
-fine-tuned neural checkpoint—so they are practical to inspect, reproduce, and
-tune for a collection.
-
-## Quick start
-
+## Install
 ```bash
-pip install -r requirements.txt
-pip install -e .
-mamv ask --doc handbook.txt --question "How long is parental leave?"
+python -m venv .venv && source .venv/bin/activate
+pip install -e '.[training,publish,dev]'
 ```
 
-`mamv ask` accepts **PDF, DOCX, TXT/Markdown, PNG, JPEG, TIFF, and BMP**.
-PDF text is extracted per page; DOCX headings and tables are retained as logical
-units; image files use Tesseract OCR. Install the system `tesseract` binary for
-OCR (for example, `apt install tesseract-ocr`).
+## Train the first real MAMV model
+1. Select a licensed Hugging Face base model and set `model.base_model` in a copied config (it is intentionally `null`).
+2. Prepare licensed, de-identified JSONL data following `datasets/README.md`, then point `data.train_file` and `data.validation_file` at it.
+3. Train with LoRA (or set `adapter.method: qlora`):
+```bash
+python scripts/train.py --config configs/document_qa.yaml
+# Continue a run:
+python scripts/train.py --config configs/document_qa.yaml --resume-from-checkpoint outputs/mamv/checkpoint-500
+```
+4. The Trainer writes real adapter/checkpoint artifacts to `training.output_dir` (default `outputs/mamv/`); its epoch checkpoints are under `outputs/mamv/checkpoint-*`. The final `save_model` and `tokenizer.save_pretrained` output also appears in `outputs/mamv/`. These ignored files are the first real weights/tokenizer produced by training.
 
-## Python API
+## Evaluate and infer
+```bash
+python scripts/evaluate.py --model outputs/mamv --data evals/document_qa.jsonl --output outputs/evaluation.json
+python scripts/inference.py --model outputs/mamv --document 'The office opens at 9 AM.' --question 'When does it open?'
+python evals/benchmark.py
+```
+Evaluation emits JSON with QA exact match and F1. Extend reports with retrieval accuracy, calibration, claim verification, genericity/quantifier accuracy, and hallucination rate before release.
 
 ```python
-from mamv_model import DocumentQA
-
-qa = DocumentQA()
-qa.add_document(
-    "policy",
-    "Employees receive 12 weeks of parental leave after a birth or adoption.",
-)
-answer = qa.ask("How much parental leave is available?")
-
-print(answer.answer)
-print(answer.citations[0].document_id, answer.citations[0].passage)
+from mamv_model import MAMVModel
+model = MAMVModel.load("outputs/mamv")
+answer = model.answer(document="...", question="...")
 ```
 
-`ask()` returns an `Answer` with a confidence score, supporting passages, and
-the exact answer span when one is found. When the evidence is weak, it returns
-`None` rather than inventing an answer.
-
-## Design
-
-1. **Ingestion and chunking:** files are parsed into page/heading/table-aware
-   parts, then split at paragraph and row boundaries with source metadata.
-2. **Indexing and retrieval:** local `sentence-transformers` embeddings are
-   stored in a local FAISS similarity index, then fused with BM25 keyword scores
-   using reciprocal-rank fusion. Supply any object
-   implementing `encode(list[str])` to `DocumentQA(embedding_model=...)` to use
-   an API-backed embedding provider; read its API key from environment variables.
-3. **Grounded reading:** the reader selects the most relevant sentence/span
-   from retrieved evidence and exposes that evidence as a citation.
-
-This is an extractive baseline: it deliberately says no answer when retrieved
-evidence has no exact content-term overlap. There is no LLM answer generator,
-so it never sends documents or API keys to a hosted service.
-
-> **Known limitation / TODO:** scanned PDF pages need a PDF rendering OCR
-> adapter. Image scans work today; a scanned PDF currently returns an actionable
-> error rather than silently producing an ungrounded answer.
-
-## Development
-
+## Publish version 1.0
+After validating a real export, ensure `outputs/mamv/config.json` and a model card (`outputs/mamv/README.md` or root `MODEL_CARD.md`) exist. Log in via `huggingface-cli login` or set `HF_TOKEN`, then:
 ```bash
-python -m unittest discover -s tests -v
+python scripts/publish_to_huggingface.py --model-dir outputs/mamv --repo-id YOUR_ORG/mamv-v1 --revision v1.0
 ```
+The script authenticates, validates required release material, creates the repo if needed, and uploads that folder at tag/revision `v1.0`. The manual GitHub workflow performs the same protected-token flow.
+
+## Roadmap
+Vision-language models, OCR, long-context models, agent verification, multi-document reasoning, education verification, evidence grounding, and genericity verification.
 
 ## License
-
-MIT. See [LICENSE](LICENSE).
+[MIT](LICENSE). See [MODEL_CARD.md](MODEL_CARD.md) for model-use guidance.
