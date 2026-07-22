@@ -10,10 +10,18 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "MAMV-Model contributors"}]
-dependencies = []
+dependencies = [
+    "faiss-cpu==1.11.0",
+    "numpy==2.3.2",
+    "Pillow==11.3.0",
+    "pypdf==5.9.0",
+    "pytesseract==0.3.13",
+    "python-docx==1.2.0",
+    "sentence-transformers==5.0.0",
+]
 
 [project.optional-dependencies]
-pdf = ["pypdf>=4.0"]
+pdf = []
 
 [project.scripts]
 mamv = "mamv_model.cli:main"

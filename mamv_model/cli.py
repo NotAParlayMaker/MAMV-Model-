@@ -9,24 +9,18 @@ from pathlib import Path
 from .pipeline import DocumentQA
 
 
-def _read_document(path: Path) -> str:
-    if path.suffix.lower() != ".pdf":
-        return path.read_text(encoding="utf-8")
-    try:
-        from pypdf import PdfReader
-    except ImportError as error:
-        raise SystemExit("PDF support requires: pip install 'mamv-model[pdf]'") from error
-    return "\n".join(page.extract_text() or "" for page in PdfReader(path).pages)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Ask a grounded question about a local document.")
-    parser.add_argument("--document", type=Path, required=True)
+    parser.add_argument("command", nargs="?", choices=["ask"], default="ask")
+    parser.add_argument("--doc", "--document", dest="document", type=Path, required=True)
     parser.add_argument("--question", required=True)
     parser.add_argument("--json", action="store_true", help="emit machine-readable output")
     args = parser.parse_args()
     qa = DocumentQA()
-    qa.add_document(args.document.name, _read_document(args.document))
+    try:
+        qa.add_file(str(args.document))
+    except (OSError, RuntimeError, ValueError) as error:
+        raise SystemExit(str(error)) from error
     result = qa.ask(args.question)
     payload = {"answer": result.answer, "confidence": result.confidence, "citations": [citation.__dict__ for citation in result.citations]}
     if args.json:
@@ -34,7 +28,10 @@ def main() -> None:
     elif result.answer:
         print(result.answer)
         for citation in result.citations:
-            print(f"\n[{citation.document_id}#{citation.passage_id}; score={citation.score}]\n{citation.passage}")
+            location = ", ".join(item for item in [citation.source_file,
+                                 f"page {citation.page_number}" if citation.page_number else None,
+                                 citation.section_title] if item)
+            print(f"\n[{location or citation.document_id}; score={citation.score}]\n{citation.passage}")
     else:
         print("No sufficiently grounded answer found.")
 
