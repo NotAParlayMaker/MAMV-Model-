@@ -24,6 +24,17 @@ Deterministic guards flag negation, number/date, quantifier, modal, and
 generic-versus-episodic mismatches. They are intentionally conservative signals;
 they do not resolve context, scope, or world truth.
 
+## Distillation watermark capability
+
+`DistillationWatermarkVerifier` (`distillation-watermark-v1`) is an opt-in adapter
+for an injected `watermark_statistical_detection` implementation. Its declared
+capability permits only `model_provenance` candidates. A detection is a bounded
+statistical observation on the supplied output sample and exposes only the
+configured detector output. If no detector is configured, it returns
+`insufficient_evidence` with an explicit limitation rather than fabricating a
+detection result. As with every verifier here, this remains a model-layer signal
+and never a MAMV or MAMV-IR decision.
+
 Verifier strategy, identities, optional model identity, threshold, checks, and
 selected-context evidence scope are recorded in `InferenceFrame.grounding`, so a
 configuration change produces a new frame identity.

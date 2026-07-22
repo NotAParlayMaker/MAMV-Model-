@@ -8,7 +8,11 @@ from .document_qa import Answer, DocumentQABackend
 from .genericity import GenericityResult, estimate_genericity
 from .reasoning import ReasoningTrace
 from .retrieval import IntegrationBudget, Retriever, select_with_budget, InMemoryRetriever, RetrievalDiversitySettings, select_diverse, RetrievedDocument
-from .verifier import EvidenceVerifier, LexicalVerifier, VerificationResult
+from .provenance import compare_evaluation_reports
+from .verifier import (
+    DistillationWatermarkVerifier, EvidenceVerifier, LexicalVerifier, VerificationResult,
+    VerifierCapability,
+)
 from .model_result import (
     MODEL_RESULT_SCHEMA_VERSION, ClaimCandidate, ConfidenceSignals, EvidenceCandidate,
     InferenceFrame, MAMVModelResult, ProposedEvidenceRelation, utc_now, build_inference_frame,
@@ -364,8 +368,7 @@ def _contradictions(items: list[tuple[RetrievedDocument, Answer]], frame_id: str
     return tuple(result)
 
 
-__all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "DecisionProvenanceGraph", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "OperationRecord", "ProposedEvidenceRelation", "ReasoningTrace", "build_decision_provenance", "build_inference_frame", "compare_inference_frames", "estimate_genericity"]
-from .provenance import compare_evaluation_reports
+__all__ = ["Answer", "ClaimCandidate", "ConfidenceSignals", "DecisionProvenanceGraph", "DistillationWatermarkVerifier", "EducationAnswer", "EducationSession", "EvidenceCandidate", "GenericityResult", "InferenceFrame", "IntegrationBudget", "MAMVModel", "MAMVModelResult", "OperationRecord", "ProposedEvidenceRelation", "ReasoningTrace", "VerifierCapability", "build_decision_provenance", "build_inference_frame", "compare_evaluation_reports", "compare_inference_frames", "estimate_genericity"]
 
 
 def _evidence_density(candidate_text: str, scoped_sources: list[str]) -> float:

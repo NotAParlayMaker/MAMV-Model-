@@ -1,6 +1,6 @@
 from mamv_model.model_result import build_inference_frame
 from mamv_model.verifier import (
-    CompositeVerifier, EntailmentVerifier, LexicalVerifier, VerificationResult,
+    CompositeVerifier, DistillationWatermarkVerifier, EntailmentVerifier, LexicalVerifier, VerificationResult,
     coverage_for_results, verify_atomic_claims,
 )
 
@@ -33,3 +33,19 @@ def test_atomic_coverage_missing_optional_and_frame_identity() -> None:
     two = build_inference_frame(question="q", original_document="d", effective_context="d", grounding_config={"verifier_strategy": "conservative"})
     assert one.frame_id != two.frame_id
     assert VerificationResult("supported", .9, ()).label == "supported"  # signal only, never a MAMV verdict
+
+
+def test_distillation_watermark_verifier_keeps_statistical_scope() -> None:
+    verifier = DistillationWatermarkVerifier(lambda sample: {"detected": True, "confidence": 0.82})
+    result = verifier.verify("Model provenance candidate", ["observed output sample"])
+    assert result.label == "supported"
+    assert result.confidence == 0.82
+    assert result.verifier_id == "distillation-watermark-v1"
+    assert result.evidence == ("observed output sample",)
+    assert "configured detector output" in result.limitations[1]
+    assert verifier.capability.allowed_claim_types == ("model_provenance",)
+    assert verifier.capability.allowed_methods == ("watermark_statistical_detection",)
+
+    no_detector = DistillationWatermarkVerifier().verify("Model provenance candidate", ["sample"])
+    assert no_detector.label == "insufficient_evidence"
+    assert no_detector.limitations
