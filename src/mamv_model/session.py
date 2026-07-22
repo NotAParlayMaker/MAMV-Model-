@@ -54,5 +54,6 @@ class ConversationSession:
         frame = build_inference_frame(question=question, original_document=self.document, effective_context=prompt_document, selected_sources=(), dropped_sources=(), model_artifacts=base.model_artifacts if base else {}, retrieval_config=base.retrieval if base else {}, generation_config=base.inference if base else {}, reasoning_strategy=base.reasoning_strategy if base else str(kwargs.get("mode", "direct")), integration_mode=base.inference.get("integration_mode", "integrated") if base else "integrated", integration_budget=budget, grounding_config=base.grounding if base else {}, session_context=session_info, parent_frame_id=source_frame.frame_id if source_frame else None, assumptions=base.assumptions if base else (), limitations=base.limitations if base else (), extra_warnings=warnings)
         transition = make_frame_transition(source_frame, frame, "conversation_followup", answer_changed=True, explanation="Conversation history was incorporated into this answer.") if source_frame else None
         answer = replace(answer, reasoning=trace, integration_budget=budget, inference_frame=frame, frame_transition=transition)
+        answer = self.model._with_provenance(answer, question, [], [], verifier_completed=False)
         self.turns.append(ConversationTurn(question, answer, trace, datetime.now(timezone.utc)))
         return answer

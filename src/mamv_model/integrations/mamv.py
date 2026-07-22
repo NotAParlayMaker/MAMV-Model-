@@ -27,5 +27,8 @@ def to_mamv_verification_request(result: MAMVModelResult) -> dict[str, Any]:
         } for item in result.contradiction_candidates],
         "warnings": [w.__dict__ for w in result.warnings],
         "model_artifacts": result.inference_frame.model_artifacts,
+        "decision_provenance": result.decision_provenance,
+        "operation_records": result.operation_records,
+        "provenance_status": "observable_non_authoritative" if result.decision_provenance else "unavailable",
         "limitations": list(result.limitations),
     }

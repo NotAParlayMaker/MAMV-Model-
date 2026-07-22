@@ -23,6 +23,8 @@ class Answer:
     contradiction_candidates: tuple[Any, ...] = ()
     source_agreement_summary: str | None = None
     synthesis_mode: str | None = None
+    decision_provenance: Any | None = None
+    operation_records: tuple[Any, ...] = ()
 
 
 class DocumentQABackend:

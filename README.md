@@ -5,6 +5,8 @@ The official model-development repository for **MAMV**'s document understanding 
 ## MAMV integration
 `MAMVModel` is the application-facing API for document QA, optional retrieval context and source IDs, genericity/quantifier analysis, and claim verification. Model backends use Hugging Face AutoModel interfaces, so deployments are not tied to any one model family.
 
+MAMV-Model exports observable decision provenance rather than hidden chain-of-thought. Provenance records which sources, chunks, claims, checks, revisions, and limitations participated in producing a result. Fluency, response length, latency, coherence, and sample agreement remain separate from evidentiary support.
+
 ## Layout
 - `src/mamv_model/`: typed inference, retrieval, verification, genericity, metrics, and config modules.
 - `configs/`: base and task-specific training configuration.

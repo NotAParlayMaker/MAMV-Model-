@@ -24,11 +24,24 @@ def _result():
 def test_portable_result_round_trip_and_candidate_labels() -> None:
     result = _result()
     data = json.loads(model_result_to_json(result))
-    assert data["schema_version"] == "mamv-model-result/v2"
+    assert data["schema_version"] == "mamv-model-result/v3"
     assert model_result_from_json(json.dumps(data)) == result
     assert result.claim_candidates[0].status == "unverified"
     assert all(item.status == "model_proposed" for item in result.proposed_relations)
     assert all(item.relation == "insufficient" for item in result.proposed_relations)
+    assert result.decision_provenance is not None
+    assert result.decision_provenance.graph_id.startswith("graph-")
+    assert any(record.operation_type == "export_result" for record in result.operation_records)
+
+
+def test_provenance_is_deterministic_and_has_no_dangling_or_private_content() -> None:
+    first, second = _result(), _result()
+    assert first.decision_provenance.graph_id == second.decision_provenance.graph_id
+    graph = first.decision_provenance
+    ids = {node.node_id for node in graph.nodes}
+    assert all(edge.source_node_id in ids and edge.target_node_id in ids for edge in graph.edges)
+    serialized = model_result_to_json(first).casefold()
+    assert "hidden_states" not in serialized and "prompt" not in serialized
 
 
 def test_frame_propagates_and_adapters_make_no_decisions() -> None:

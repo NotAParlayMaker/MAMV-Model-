@@ -10,8 +10,9 @@ from .reasoning import ReasoningTrace
 from .retrieval import IntegrationBudget
 from .verifier import VerificationResult
 
-MODEL_RESULT_SCHEMA_VERSION = "mamv-model-result/v2"
+MODEL_RESULT_SCHEMA_VERSION = "mamv-model-result/v3"
 LEGACY_SCHEMA_VERSION = "mamv-model-result/v1"
+PREVIOUS_SCHEMA_VERSION = "mamv-model-result/v2"
 
 def utc_now() -> str: return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 def canonical_json(value: Any) -> str:
@@ -89,7 +90,7 @@ class ContradictionCandidate:
     contradiction_id: str; claim_a_id: str; claim_b_id: str; source_a_ids: tuple[str, ...]; source_b_ids: tuple[str, ...]; relation: Literal["contradicts", "temporally_distinct", "scope_distinct", "qualifies", "potentially_conflicting", "incomparable"]; confidence: float | None; explanation_summary: str; frame_id: str; limitations: tuple[str, ...]
 @dataclass(frozen=True)
 class MAMVModelResult:
-    schema_version: str; result_id: str; answer: str; source_ids: tuple[str, ...]; inference_frame: InferenceFrame; reasoning_summary: ReasoningTrace | None; confidence_signals: ConfidenceSignals; grounding: VerificationResult | None; genericity: GenericityResult | None; integration_budget: IntegrationBudget | None; warnings: tuple[FrameWarning, ...]; limitations: tuple[str, ...]; created_at: str; claim_candidates: tuple[ClaimCandidate, ...] = (); evidence_candidates: tuple[EvidenceCandidate, ...] = (); proposed_relations: tuple[ProposedEvidenceRelation, ...] = (); frame_transition: InferenceFrameTransition | None = None; contradiction_candidates: tuple[ContradictionCandidate, ...] = (); document_sources: tuple[Any, ...] = (); source_agreement_summary: str | None = None; synthesis_mode: str | None = None
+    schema_version: str; result_id: str; answer: str; source_ids: tuple[str, ...]; inference_frame: InferenceFrame; reasoning_summary: ReasoningTrace | None; confidence_signals: ConfidenceSignals; grounding: VerificationResult | None; genericity: GenericityResult | None; integration_budget: IntegrationBudget | None; warnings: tuple[FrameWarning, ...]; limitations: tuple[str, ...]; created_at: str; claim_candidates: tuple[ClaimCandidate, ...] = (); evidence_candidates: tuple[EvidenceCandidate, ...] = (); proposed_relations: tuple[ProposedEvidenceRelation, ...] = (); frame_transition: InferenceFrameTransition | None = None; contradiction_candidates: tuple[ContradictionCandidate, ...] = (); document_sources: tuple[Any, ...] = (); source_agreement_summary: str | None = None; synthesis_mode: str | None = None; decision_provenance: Any | None = None; operation_records: tuple[Any, ...] = ()
 def _plain(value: Any) -> Any: return json.loads(canonical_json(value))
 def model_result_to_json(result: MAMVModelResult, *, compact=False) -> str:
     if result.schema_version != MODEL_RESULT_SCHEMA_VERSION: raise ValueError(f"Unsupported model result schema version: {result.schema_version}")
@@ -97,9 +98,14 @@ def model_result_to_json(result: MAMVModelResult, *, compact=False) -> str:
 def _construct(cls, data): return cls(**{f.name: data[f.name] for f in fields(cls) if f.name in data})
 def model_result_from_json(payload: str) -> MAMVModelResult:
     d=json.loads(payload); version=d.get("schema_version")
-    if version not in (LEGACY_SCHEMA_VERSION, MODEL_RESULT_SCHEMA_VERSION): raise ValueError(f"Unsupported model result schema version: {version!r}")
+    if version not in (LEGACY_SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION, MODEL_RESULT_SCHEMA_VERSION): raise ValueError(f"Unsupported model result schema version: {version!r}")
     if version == LEGACY_SCHEMA_VERSION:
         f=d["inference_frame"]; d["inference_frame"]=asdict(build_inference_frame(question="legacy", original_document="", effective_context="", selected_sources=tuple(), dropped_sources=tuple(), model_artifacts={"base_model_id":f.get("model_id", "unknown")}, reasoning_strategy=f.get("reasoning_strategy", "direct"), grounding_config={"required":f.get("grounding_required", True)}, limitations=("Migrated from v1; original context and artifact revisions were not recorded.",))) | {"frame_id": f["frame_id"], "context_hash": f.get("context_hash", "")}; d["schema_version"]=MODEL_RESULT_SCHEMA_VERSION
+    if version in (LEGACY_SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION):
+        d["schema_version"] = MODEL_RESULT_SCHEMA_VERSION
+        d["decision_provenance"] = None
+        d["operation_records"] = ()
+        d.setdefault("limitations", []).append("Decision provenance unavailable: legacy result did not record this operation.")
     for k in ("source_ids", "limitations"): d[k]=tuple(d.get(k,()))
     fd=d["inference_frame"]
     for k in ("visible_source_ids","excluded_source_ids","assumptions","limitations","warnings","document_ids","contradiction_candidates","temporal_relations","collection_limitations"): fd[k]=tuple(fd.get(k,()))
@@ -122,6 +128,15 @@ def model_result_from_json(payload: str) -> MAMVModelResult:
     for k,c in (("claim_candidates",ClaimCandidate),("evidence_candidates",EvidenceCandidate),("proposed_relations",ProposedEvidenceRelation),("contradiction_candidates",ContradictionCandidate)):
         d[k]=tuple(_construct(c,{**x, **{z:tuple(x[z]) for z in ("source_ids","limitations") if z in x}}) for x in d.get(k,()))
     if d.get("frame_transition"): d["frame_transition"]=_construct(InferenceFrameTransition,d["frame_transition"])
+    if d.get("decision_provenance"):
+        from .decision_provenance import DecisionProvenanceGraph, ProvenanceEdge, ProvenanceNode
+        graph = d["decision_provenance"]
+        graph["nodes"] = tuple(_construct(ProvenanceNode, {**x, **{z: tuple(x.get(z, ())) for z in ("source_ids", "claim_ids", "evidence_ids", "limitations")}}) for x in graph.get("nodes", ()))
+        graph["edges"] = tuple(_construct(ProvenanceEdge, {**x, "limitations": tuple(x.get("limitations", ()))}) for x in graph.get("edges", ()))
+        graph["unresolved_items"] = tuple(graph.get("unresolved_items", ())); graph["limitations"] = tuple(graph.get("limitations", ()))
+        d["decision_provenance"] = _construct(DecisionProvenanceGraph, graph)
+    from .decision_provenance import OperationRecord
+    d["operation_records"] = tuple(_construct(OperationRecord, {**x, **{z: tuple(x.get(z, ())) for z in ("input_ids", "output_ids", "warnings", "limitations")}}) for x in d.get("operation_records", ()))
     return _construct(MAMVModelResult,d)
 def save_model_result(result,path,*,compact=False): Path(path).write_text(model_result_to_json(result,compact=compact),encoding="utf-8")
 def load_model_result(path): return model_result_from_json(Path(path).read_text(encoding="utf-8"))
