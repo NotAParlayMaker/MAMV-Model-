@@ -10,9 +10,18 @@ from .reasoning import ReasoningTrace
 from .retrieval import IntegrationBudget
 from .verifier import VerificationResult
 
-MODEL_RESULT_SCHEMA_VERSION = "mamv-model-result/v3"
+MODEL_RESULT_SCHEMA_VERSION = "mamv-model-result/v4"
 LEGACY_SCHEMA_VERSION = "mamv-model-result/v1"
 PREVIOUS_SCHEMA_VERSION = "mamv-model-result/v2"
+PREVIOUS_RESULT_SCHEMA_VERSION = "mamv-model-result/v3"
+GENERATION_STRATEGIES = frozenset({"direct", "structured_reasoning", "self_consistency", "self_refine", "multi_model_debate"})
+
+def export_generation_strategy(strategy: str) -> str:
+    """Map the backend's legacy ``cot`` label to the portable export vocabulary."""
+    exported = "structured_reasoning" if strategy == "cot" else strategy
+    if exported not in GENERATION_STRATEGIES:
+        raise ValueError(f"Unsupported generation strategy for export: {strategy!r}")
+    return exported
 
 def utc_now() -> str: return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 def canonical_json(value: Any) -> str:
@@ -50,6 +59,7 @@ class FrameCompatibility:
 def _source(item: Any) -> dict[str, Any]:
     return {"source_id": getattr(item, "source_id", str(item)), "chunk_hash": content_hash(getattr(item, "text", "")), "source_location": getattr(item, "source_location", None), "score": getattr(item, "score", None)}
 def build_inference_frame(*, question: str, original_document: str, effective_context: str, selected_sources: tuple[Any, ...] | list[Any] = (), dropped_sources: tuple[Any, ...] | list[Any] = (), model_artifacts: dict[str, Any] | None = None, retrieval_config: dict[str, Any] | None = None, generation_config: dict[str, Any] | None = None, reasoning_strategy: str = "direct", integration_mode: str = "integrated", integration_budget: IntegrationBudget | None = None, grounding_config: dict[str, Any] | None = None, session_context: dict[str, Any] | None = None, parent_frame_id: str | None = None, assumptions: tuple[str, ...] = (), limitations: tuple[str, ...] = (), extra_warnings: tuple[FrameWarning, ...] = (), collection_id: str | None = None, document_ids: tuple[str, ...] = (), synthesis_mode: str | None = None, contradiction_candidates: tuple[Any, ...] = (), temporal_relations: tuple[Any, ...] = (), collection_limitations: tuple[str, ...] = ()) -> InferenceFrame:
+    reasoning_strategy = export_generation_strategy(reasoning_strategy)
     selected, dropped = tuple(_source(x) for x in selected_sources), tuple(_source(x) for x in dropped_sources)
     artifacts, retrieval, generation, grounding = model_artifacts or {}, retrieval_config or {}, generation_config or {}, grounding_config or {}
     warnings = list(extra_warnings)
@@ -75,14 +85,21 @@ def compare_inference_frames(a: InferenceFrame, b: InferenceFrame) -> FrameCompa
 
 @dataclass(frozen=True)
 class ConfidenceSignals:
-    model_confidence: float | None = None; self_confidence: float | None = None; consensus_confidence: float | None = None; grounding_heuristic_confidence: float | None = None; retrieval_coverage: float | None = None; coherence_score: float | None = None
+    # This is model-reported certainty, never verification confidence or a verdict.
+    model_stated_confidence: float | None = None; consensus_confidence: float | None = None; grounding_heuristic_confidence: float | None = None; retrieval_coverage: float | None = None; coherence_score: float | None = None
     def __post_init__(self):
-        for value in (self.model_confidence, self.self_confidence, self.consensus_confidence, self.grounding_heuristic_confidence, self.retrieval_coverage, self.coherence_score):
+        for value in (self.model_stated_confidence, self.consensus_confidence, self.grounding_heuristic_confidence, self.retrieval_coverage, self.coherence_score):
             if value is not None and not 0 <= value <= 1: raise ValueError("Confidence signals must be within [0, 1].")
 @dataclass(frozen=True)
-class ClaimCandidate: claim_id: str; text: str; source_span: str | None; claim_type: str; literal_or_implied: str; hedge: str | None; hypothetical: bool; source_ids: tuple[str, ...]; frame_id: str; extraction_confidence: float | None; limitations: tuple[str, ...]; status: Literal["unverified"] = "unverified"
+class ClaimCandidate:
+    claim_id: str; text: str; source_span: str | None; claim_type: str; literal_or_implied: str; hedge: str | None; hypothetical: bool; source_ids: tuple[str, ...]; frame_id: str; extraction_confidence: float | None; limitations: tuple[str, ...]; status: Literal["unverified"] = "unverified"; derivation: Literal["retrieved", "extracted", "generated"] = "generated"; evidence_density: float | None = None
+    def __post_init__(self):
+        if self.derivation == "generated" and self.evidence_density is None: raise ValueError("Generated claim candidates must record evidence_density.")
 @dataclass(frozen=True)
-class EvidenceCandidate: evidence_id: str; source_id: str; text_hash: str; source_location: str | None; retrieval_score: float | None; selected: bool; dropped_reason: str | None; frame_id: str; limitations: tuple[str, ...]
+class EvidenceCandidate:
+    evidence_id: str; source_id: str; text_hash: str; source_location: str | None; retrieval_score: float | None; selected: bool; dropped_reason: str | None; frame_id: str; limitations: tuple[str, ...]; derivation: Literal["retrieved", "extracted", "generated"] = "retrieved"; evidence_density: float | None = None
+    def __post_init__(self):
+        if self.derivation == "generated" and self.evidence_density is None: raise ValueError("Generated evidence candidates must record evidence_density.")
 @dataclass(frozen=True)
 class ProposedEvidenceRelation: claim_id: str; evidence_id: str; relation: Literal["supports", "contradicts", "qualifies", "insufficient", "unrelated"]; confidence: float | None; rationale_summary: str; limitations: tuple[str, ...]; status: Literal["model_proposed"] = "model_proposed"
 @dataclass(frozen=True)
@@ -98,10 +115,10 @@ def model_result_to_json(result: MAMVModelResult, *, compact=False) -> str:
 def _construct(cls, data): return cls(**{f.name: data[f.name] for f in fields(cls) if f.name in data})
 def model_result_from_json(payload: str) -> MAMVModelResult:
     d=json.loads(payload); version=d.get("schema_version")
-    if version not in (LEGACY_SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION, MODEL_RESULT_SCHEMA_VERSION): raise ValueError(f"Unsupported model result schema version: {version!r}")
+    if version not in (LEGACY_SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION, PREVIOUS_RESULT_SCHEMA_VERSION, MODEL_RESULT_SCHEMA_VERSION): raise ValueError(f"Unsupported model result schema version: {version!r}")
     if version == LEGACY_SCHEMA_VERSION:
         f=d["inference_frame"]; d["inference_frame"]=asdict(build_inference_frame(question="legacy", original_document="", effective_context="", selected_sources=tuple(), dropped_sources=tuple(), model_artifacts={"base_model_id":f.get("model_id", "unknown")}, reasoning_strategy=f.get("reasoning_strategy", "direct"), grounding_config={"required":f.get("grounding_required", True)}, limitations=("Migrated from v1; original context and artifact revisions were not recorded.",))) | {"frame_id": f["frame_id"], "context_hash": f.get("context_hash", "")}; d["schema_version"]=MODEL_RESULT_SCHEMA_VERSION
-    if version in (LEGACY_SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION):
+    if version in (LEGACY_SCHEMA_VERSION, PREVIOUS_SCHEMA_VERSION, PREVIOUS_RESULT_SCHEMA_VERSION):
         d["schema_version"] = MODEL_RESULT_SCHEMA_VERSION
         d["decision_provenance"] = None
         d["operation_records"] = ()
@@ -116,7 +133,10 @@ def model_result_from_json(payload: str) -> MAMVModelResult:
                 if key in fd[section]: fd[section][key] = tuple(fd[section][key])
     if fd.get("grounding") and "limitations" in fd["grounding"]: fd["grounding"]["limitations"] = tuple(fd["grounding"]["limitations"])
     d["inference_frame"]=_construct(InferenceFrame,fd); d["warnings"]=tuple(FrameWarning(**({**x,"source_ids":tuple(x.get("source_ids",()))} if isinstance(x,dict) else {"code":"GROUNDING_SCOPE_LIMITED","message":x,"affected_field":"legacy","severity":"warning"})) for x in d.get("warnings",())); d["document_sources"] = tuple(d.get("document_sources", ()))
-    d["confidence_signals"]=_construct(ConfidenceSignals,d["confidence_signals"])
+    confidence = d["confidence_signals"]
+    if "model_stated_confidence" not in confidence:
+        confidence["model_stated_confidence"] = confidence.get("self_confidence", confidence.get("model_confidence"))
+    d["confidence_signals"]=_construct(ConfidenceSignals, confidence)
     for k,c in (("grounding",VerificationResult),("genericity",GenericityResult),("integration_budget",IntegrationBudget),("reasoning_summary",ReasoningTrace)):
         if d.get(k) is not None:
             if k == "grounding":
@@ -126,7 +146,17 @@ def model_result_from_json(payload: str) -> MAMVModelResult:
                     d[k]["component_results"] = tuple(_construct(VerificationResult, {**x, **{z: tuple(x[z]) for z in ("evidence", "evidence_ids", "limitations", "component_results") if z in x}}) for x in d[k]["component_results"])
             d[k]=_construct(c,d[k])
     for k,c in (("claim_candidates",ClaimCandidate),("evidence_candidates",EvidenceCandidate),("proposed_relations",ProposedEvidenceRelation),("contradiction_candidates",ContradictionCandidate)):
-        d[k]=tuple(_construct(c,{**x, **{z:tuple(x[z]) for z in ("source_ids","limitations") if z in x}}) for x in d.get(k,()))
+        values = []
+        for x in d.get(k, ()):
+            item = {**x, **{z: tuple(x[z]) for z in ("source_ids", "limitations") if z in x}}
+            if k == "claim_candidates":
+                item.setdefault("derivation", "generated")
+                if item["derivation"] == "generated": item.setdefault("evidence_density", 0.0)
+            elif k == "evidence_candidates":
+                item.setdefault("derivation", "retrieved")
+                if item["derivation"] == "generated": item.setdefault("evidence_density", 0.0)
+            values.append(_construct(c, item))
+        d[k] = tuple(values)
     if d.get("frame_transition"): d["frame_transition"]=_construct(InferenceFrameTransition,d["frame_transition"])
     if d.get("decision_provenance"):
         from .decision_provenance import DecisionProvenanceGraph, ProvenanceEdge, ProvenanceNode
